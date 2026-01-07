@@ -1,0 +1,615 @@
+<script type="text/babel">
+  const { useEffect, useMemo, useState, useRef } = React;
+
+  /**
+   * Wrapper seguro para google.script.run
+   */
+  function gasCall(fnName, ...args) {
+    return new Promise((resolve, reject) => {
+      try {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(err => reject(err))
+          [fnName](...args);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  function SpinnerInline({ label = "Cargando..." }) {
+    return (
+      <span className="d-inline-flex align-items-center gap-2">
+        <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        <span className="tiny">{label}</span>
+      </span>
+    );
+  }
+
+  function LoginView({ onLoggedIn }) {
+    const [username, setUsername] = useState("");
+    const [password, setPassword] = useState("");
+    const [showPass, setShowPass] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+
+    async function handleSubmit(e) {
+      e.preventDefault();
+      setError("");
+
+      if (!username.trim() || !password.trim()) {
+        setError("Completa usuario y contraseña.");
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const res = await gasCall("login", username.trim(), password.trim());
+        if (res && res.ok) {
+          // Persistimos token para mantener sesión
+          localStorage.setItem("APP_TOKEN", res.token);
+          localStorage.setItem("APP_USER", JSON.stringify(res.user));
+          onLoggedIn(res.user, res.token);
+        } else {
+          setError((res && res.message) || "Credenciales inválidas.");
+        }
+      } catch (err) {
+        setError(String(err?.message || err));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    return (
+      <div className="auth-wrap">
+        <div className="auth-card">
+          <div className="card-body">
+            <div className="brand-ring">
+              <div className="brand-logo">
+                <i className="bi bi-scissors fs-1" aria-hidden="true"></i>
+              </div>
+            </div>
+
+            <h2 className="brand-title">HOME</h2>
+
+            <form onSubmit={handleSubmit} noValidate>
+              <div className="mb-3">
+                <label className="form-label">
+                  <span className="req">*</span>Usuario
+                </label>
+                <div className="input-group">
+                  <span className="input-group-text">
+                    <i className="bi bi-person" aria-hidden="true"></i>
+                  </span>
+                  <input
+                    className="form-control auth-input"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Usuario"
+                    autoComplete="username"
+                  />
+                </div>
+              </div>
+
+              <div className="mb-2">
+                <label className="form-label">
+                  <span className="req">*</span>Contraseña
+                </label>
+                <div className="input-group">
+                  <span className="input-group-text">
+                    <i className="bi bi-lock" aria-hidden="true"></i>
+                  </span>
+                  <input
+                    className="form-control auth-input"
+                    type={showPass ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    className="input-group-text"
+                    onClick={() => setShowPass((s) => !s)}
+                    title={showPass ? "Ocultar" : "Mostrar"}
+                    aria-label={showPass ? "Ocultar contraseña" : "Mostrar contraseña"}
+                  >
+                    <i className={`bi ${showPass ? "bi-eye-slash" : "bi-eye"}`} aria-hidden="true"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div className="d-flex justify-content-start mb-3">
+                <a
+                  className="link-muted tiny"
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setError("Si olvidaste tu contraseña, contacta al administrador.");
+                  }}
+                >
+                  ¿Olvidaste tu contraseña?
+                </a>
+              </div>
+
+              {error ? (
+                <div className="alert alert-danger py-2 small" role="alert">
+                  <i className="bi bi-exclamation-triangle me-2" aria-hidden="true"></i>
+                  {error}
+                </div>
+              ) : null}
+
+              <button className="btn btn-gold w-100" type="submit" disabled={loading}>
+                {loading ? <SpinnerInline label="Verificando..." /> : "INGRESAR"}
+              </button>
+            </form>
+
+            <div className="divider"></div>
+            <div className="tiny text-center" style={{color:"rgba(255,255,255,.55)"}}>
+              Control de acceso • Google Sheets
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function TopBar({
+    user,
+    section,
+    personasTab,
+    onChangePersonasTab,
+    gastosTab,
+    onChangeGastosTab,
+    prestamosTab,
+    onChangePrestamosTab,
+    onLogout
+  }) {
+    const [menuOpen, setMenuOpen] = useState(false);
+    const wrapRef = useRef(null);
+
+    const initials = (user?.nombreCompleto || user?.nombre_usuario || "U")
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map(s => s[0].toUpperCase())
+      .join("");
+
+    // Cierra el menú cuando cambias de sección/tab o tocas fuera
+    useEffect(() => { setMenuOpen(false); }, [section, personasTab, gastosTab, prestamosTab]);
+
+    useEffect(() => {
+      function onDocPointerDown(e) {
+        if (!menuOpen) return;
+        const el = wrapRef.current;
+        if (el && !el.contains(e.target)) setMenuOpen(false);
+      }
+      document.addEventListener("pointerdown", onDocPointerDown, { passive: true });
+      return () => document.removeEventListener("pointerdown", onDocPointerDown);
+    }, [menuOpen]);
+
+    return (
+      <div className="wbs-topbar">
+        <div className="wbs-topbar-inner">
+
+          <div className="wbs-topbar-left">
+            {section === "personas" ? (
+              <div className="nav nav-pills wbs-section-pills" role="tablist" aria-label="Navegación de Personas">
+                <button
+                  type="button"
+                  className={`nav-link ${personasTab === "personas" ? "active" : ""}`}
+                  onClick={() => onChangePersonasTab("personas")}
+                >
+                  Personas
+                </button>
+                <button
+                  type="button"
+                  className={`nav-link ${personasTab === "usuarios" ? "active" : ""}`}
+                  onClick={() => onChangePersonasTab("usuarios")}
+                >
+                  Usuarios
+                </button>
+              </div>
+            ) : section === "gastos" ? (
+              <div className="nav nav-pills wbs-section-pills" role="tablist" aria-label="Navegación de Gastos">
+                <button
+                  type="button"
+                  className={`nav-link ${gastosTab === "fijos" ? "active" : ""}`}
+                  onClick={() => onChangeGastosTab("fijos")}
+                >
+                  Gastos Fijos
+                </button>
+
+                <button
+                  type="button"
+                  className={`nav-link ${gastosTab === "variables" ? "active" : ""}`}
+                  onClick={() => onChangeGastosTab("variables")}
+                >
+                  Gastos Variables
+                </button>
+
+                <button
+                  type="button"
+                  className={`nav-link ${gastosTab === "netos" ? "active" : ""}`}
+                  onClick={() => onChangeGastosTab("netos")}
+                >
+                  Gastos Netos
+                </button>
+              </div>
+            ) : section === "prestamos" ? (
+              <div className="nav nav-pills wbs-section-pills" role="tablist" aria-label="Navegación de Préstamos">
+                <button
+                  type="button"
+                  className={`nav-link ${prestamosTab === "solicitar" ? "active" : ""}`}
+                  onClick={() => onChangePrestamosTab("solicitar")}
+                >
+                  Solicitar
+                </button>
+
+                <button
+                  type="button"
+                  className={`nav-link ${prestamosTab === "otorgar" ? "active" : ""}`}
+                  onClick={() => onChangePrestamosTab("otorgar")}
+                >
+                  Otorgar
+                </button>
+              </div>
+            ) : (
+              <div className="wbs-topbar-title">HOME</div>
+            )}
+          </div>
+
+
+          <div className="wbs-topbar-right">
+            <div className="wbs-user-menu-wrap" ref={wrapRef}>
+              <button
+                type="button"
+                className="wbs-user-pill wbs-user-pill-btn"
+                onClick={() => setMenuOpen(v => !v)}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen ? "true" : "false"}
+                title="Cuenta"
+              >
+                <span className="wbs-user-avatar">{initials}</span>
+                <span className="wbs-user-name">{(user?.nombre_usuario || "user")}</span>
+                <span className="wbs-user-dot" aria-hidden="true"></span>
+                <i className={`bi ${menuOpen ? "bi-chevron-up" : "bi-chevron-down"} wbs-user-caret`} aria-hidden="true"></i>
+              </button>
+
+              {menuOpen ? (
+                <div className="wbs-user-menu" role="menu" aria-label="Menú de usuario">
+                  <div className="wbs-user-menu-row">
+                    <div className="wbs-user-menu-avatar">{initials}</div>
+                    <div className="wbs-user-menu-meta">
+                      <div className="wbs-user-menu-username">{user?.nombre_usuario || "Usuario"}</div>
+                      <div className="wbs-user-menu-fullname">{user?.nombreCompleto || "—"}</div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="wbs-user-menu-logout"
+                      onClick={() => { setMenuOpen(false); onLogout && onLogout(); }}
+                      title="Cerrar sesión"
+                    >
+                      <i className="bi bi-box-arrow-right"></i>
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function SectionBar({ section, gastosTab, onChangeGastosTab }) {
+    if (section !== "gastos") return null;
+
+    return (
+      <div className="wbs-sectionbar">
+        <div className="wbs-sectionbar-inner">
+          <div className="nav nav-pills wbs-section-pills" role="tablist" aria-label="Navegación de Gastos">
+            <button
+              type="button"
+              className={`nav-link ${gastosTab === "fijos" ? "active" : ""}`}
+              onClick={() => onChangeGastosTab("fijos")}
+            >
+              Gastos Fijos
+            </button>
+
+            <button
+              type="button"
+              className={`nav-link ${gastosTab === "variables" ? "active" : ""}`}
+              onClick={() => onChangeGastosTab("variables")}
+            >
+              Gastos Variables
+            </button>
+
+            <button
+              type="button"
+              className={`nav-link ${gastosTab === "netos" ? "active" : ""}`}
+              onClick={() => onChangeGastosTab("netos")}
+            >
+              Gastos Netos
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function Sidebar({ activeKey, onNavigate, onLogout }) {
+    return (
+      <aside className="wbs-sidebar">
+        <div className="wbs-brand">
+          <div className="wbs-brand-badge">
+            <div><i className="bi bi-scissors"></i></div>
+          </div>
+          <div className="wbs-brand-title">Home</div>
+          <div className="wbs-brand-sep"></div>
+        </div>
+
+        <div className="wbs-nav px-2">
+          <button
+            className={`wbs-navitem ${activeKey === "inicio" ? "active" : ""}`}
+            onClick={() => onNavigate("inicio")}
+          >
+            <i className="bi bi-house"></i>
+            <span>Inicio</span>
+          </button>
+
+          <button
+            className={`wbs-navitem ${activeKey === "personas" ? "active" : ""}`}
+            onClick={() => onNavigate("personas")}
+          >
+            <i className="bi bi-people"></i>
+            <span>Personas</span>
+          </button>
+
+          <button
+            className={`wbs-navitem ${activeKey === "gastos" ? "active" : ""}`}
+            onClick={() => onNavigate("gastos")}
+          >
+            <i className="bi bi-cash-coin"></i>
+            <span>Gastos</span>
+          </button>
+
+          <button
+            className={`wbs-navitem ${activeKey === "prestamos" ? "active" : ""}`}
+            onClick={() => onNavigate("prestamos")}
+          >
+            <i className="bi bi-cash-stack"></i>
+            <span>Prestamos</span>
+          </button>
+        </div>
+
+        <div className="mt-auto wbs-nav-footer">
+          <button className="wbs-navitem w-100" onClick={onLogout}>
+            <i className="bi bi-box-arrow-left"></i>
+            <span>Cerrar Sesión</span>
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
+  function MobileNav({ activeKey, onNavigate }) {
+    return (
+      <nav className="wbs-mobile-nav">
+        <button
+          className={`wbs-mnav-item ${activeKey === "inicio" ? "active" : ""}`}
+          onClick={() => onNavigate("inicio")}
+        >
+          <i className="bi bi-house"></i>
+          <div>Inicio</div>
+        </button>
+
+        <button
+          className={`wbs-mnav-item ${activeKey === "personas" ? "active" : ""}`}
+          onClick={() => onNavigate("personas")}
+        >
+          <i className="bi bi-people"></i>
+          <div>Personas</div>
+        </button>
+
+        <button
+          className={`wbs-mnav-item ${activeKey === "gastos" ? "active" : ""}`}
+          onClick={() => onNavigate("gastos")}
+        >
+          <i className="bi bi-cash-coin"></i>
+          <div>Gastos</div>
+        </button>
+
+        <button
+          className={`wbs-mnav-item ${activeKey === "prestamos" ? "active" : ""}`}
+          onClick={() => onNavigate("prestamos")}
+        >
+          <i className="bi bi-cash-stack"></i>
+          <div>Prestamos</div>
+        </button>
+
+        <button
+          className="wbs-mnav-item"
+          type="button"
+          data-bs-toggle="offcanvas"
+          data-bs-target="#wbsMore"
+          aria-controls="wbsMore"
+        >
+          <i className="bi bi-list"></i>
+          <div>Más</div>
+        </button>
+      </nav>
+    );
+  }
+
+  function MoreOffcanvas({ onLogout }) {
+    return (
+      <div className="offcanvas offcanvas-bottom wbs-more" tabIndex="-1" id="wbsMore" aria-labelledby="wbsMoreLabel">
+        <div className="offcanvas-header">
+          <h5 className="offcanvas-title" id="wbsMoreLabel">Más</h5>
+          <button type="button" className="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+        </div>
+        <div className="offcanvas-body">
+          <button
+            className="btn btn-outline-dark w-100"
+            onClick={onLogout}
+            data-bs-dismiss="offcanvas"
+          >
+            <i className="bi bi-box-arrow-left me-2"></i>
+            Cerrar Sesión
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function ProtectedApp({ user, token, onLogout }) {
+    const [activeKey, setActiveKey] = useState("inicio");
+    const [gastosTab, setGastosTab] = useState("fijos");
+    const [personasTab, setPersonasTab] = useState("personas");
+    const [prestamosTab, setPrestamosTab] = useState("solicitar");
+
+    function handleNavigate(key) {
+      setActiveKey(key);
+      if (key === "gastos") setGastosTab((prev) => prev || "fijos");
+      if (key === "personas") setPersonasTab((prev) => prev || "personas");
+      if (key === "prestamos") setPrestamosTab((prev) => prev || "solicitar");
+      // Limpieza defensiva (móvil): si queda un backdrop pegado, bloquea los taps
+      try {
+        document.querySelectorAll('.modal-backdrop, .offcanvas-backdrop').forEach(el => el.remove());
+        document.querySelectorAll('.modal.show').forEach(m => {
+          m.classList.remove('show');
+          m.style.display = 'none';
+          m.setAttribute('aria-hidden', 'true');
+          m.removeAttribute('aria-modal');
+        });
+        if (!document.querySelector('.modal.show')) document.body.classList.remove('modal-open');
+      } catch (e) {}
+      // Cierra el offcanvas si está abierto
+      try {
+        const el = document.getElementById("wbsMore");
+        if (el && window.bootstrap?.Offcanvas) {
+          const inst = window.bootstrap.Offcanvas.getInstance(el);
+          if (inst) inst.hide();
+        }
+      } catch (e) {}
+    }
+
+    const content = useMemo(() => {
+      if (activeKey === "personas") {
+        if (personasTab === "usuarios") return <UsuariosView user={user} />;
+        return <PersonasView user={user} />;
+      }
+      if (activeKey === "gastos") {
+        if (gastosTab === "variables") return <GastosVariablesView user={user} />;
+        if (gastosTab === "netos") return <GastosNetosView user={user} />;
+        return <GastosFijosView user={user} />;
+      }
+      if (activeKey === "prestamos") {
+        if (prestamosTab === "otorgar") return <PrestamosOtorgarView user={user} />;
+        return <PrestamosSolicitarView user={user} />;
+      }
+      return <InicioView user={user} />;
+    }, [activeKey, gastosTab, personasTab, prestamosTab, user]);
+
+    return (
+      <div className="wbs-layout">
+        <Sidebar
+          activeKey={activeKey}
+          onNavigate={handleNavigate}
+          onLogout={onLogout}
+        />
+
+        <main className="wbs-main">
+          <TopBar
+            user={user}
+            section={activeKey}
+            personasTab={personasTab}
+            onChangePersonasTab={setPersonasTab}
+            gastosTab={gastosTab}
+            onChangeGastosTab={setGastosTab}
+            prestamosTab={prestamosTab}
+            onChangePrestamosTab={setPrestamosTab}
+            onLogout={onLogout}
+          />
+          <div className="wbs-content">
+            {content}
+          </div>
+        </main>
+
+        <MobileNav activeKey={activeKey} onNavigate={handleNavigate} />
+        <MoreOffcanvas onLogout={onLogout} />
+      </div>
+    );
+  }
+
+  function App() {
+    const [booting, setBooting] = useState(true);
+    const [user, setUser] = useState(null);
+    const [token, setToken] = useState("");
+
+    // Cambia el tema del body: login (oscuro) vs app (claro)
+    useEffect(() => {
+      if (user) document.body.classList.add("app-mode");
+      else document.body.classList.remove("app-mode");
+      return () => document.body.classList.remove("app-mode");
+    }, [user]);
+
+    async function boot() {
+      try {
+        const t = (localStorage.getItem("APP_TOKEN") || "").trim();
+        const uRaw = localStorage.getItem("APP_USER");
+        if (!t || !uRaw) return;
+
+        const u = JSON.parse(uRaw);
+        const res = await gasCall("validateToken", t);
+        if (res && res.ok) {
+          setUser(u);
+          setToken(t);
+        } else {
+          localStorage.removeItem("APP_TOKEN");
+          localStorage.removeItem("APP_USER");
+        }
+      } catch (e) {
+        localStorage.removeItem("APP_TOKEN");
+        localStorage.removeItem("APP_USER");
+      } finally {
+        setBooting(false);
+      }
+    }
+
+    useEffect(() => { boot(); }, []);
+
+    async function handleLogout() {
+      const t = (localStorage.getItem("APP_TOKEN") || "").trim();
+      localStorage.removeItem("APP_TOKEN");
+      localStorage.removeItem("APP_USER");
+      setUser(null);
+      setToken("");
+
+      if (t) {
+        try { await gasCall("logout", t); } catch (e) {}
+      }
+    }
+
+    if (booting) {
+      return (
+        <div className="auth-wrap">
+          <div className="auth-card">
+            <div className="text-center text-muted">Cargando...</div>
+          </div>
+        </div>
+      );
+    }
+
+    if (!user) {
+      return <LoginView onLoggedIn={(u, t) => { setUser(u); setToken(t); }} />;
+    }
+
+    return <ProtectedApp user={user} token={token} onLogout={handleLogout} />;
+  }
+
+  const root = ReactDOM.createRoot(document.getElementById("root"));
+  root.render(<App />);
+</script>

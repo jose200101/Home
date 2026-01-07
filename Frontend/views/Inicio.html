@@ -1,0 +1,14 @@
+<script type="text/babel">
+  /**
+   * View: Inicio
+   * Requisito actual: no mostrar datos demo. Solo "Bienvenido".
+   */
+  function InicioView({ user }) {
+    return (
+      <div className="wbs-page">
+        <h2 className="wbs-page-title mb-0">Bienvenido{user?.nombreCompleto ? `, ${user.nombreCompleto}` : ""}</h2>
+        <div className="text-muted mt-2">Selecciona una opción del menú para continuar.</div>
+      </div>
+    );
+  }
+</script>

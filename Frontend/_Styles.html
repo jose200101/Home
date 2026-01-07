@@ -1,0 +1,868 @@
+<style>
+  :root{
+    --gold: #c9ad6a;
+    --gold-2: #b8934e;
+    --panel: rgba(18, 18, 18, 0.72);
+    --panel-2: rgba(18, 18, 18, 0.86);
+    --text: #f2f2f2;
+    --muted: rgba(255,255,255,.65);
+  }
+
+  html, body {
+    height: 100%;
+    background: radial-gradient(1200px 800px at 15% 15%, rgba(255,255,255,.08), transparent 60%),
+                radial-gradient(900px 600px at 85% 80%, rgba(201,173,106,.10), transparent 55%),
+                linear-gradient(135deg, #0c0c0c, #121212 45%, #0b0b0b);
+    color: var(--text);
+  }
+
+  /* Root should occupy the full viewport so the login can be perfectly centered */
+  #root{ min-height: 100vh; }
+
+  .auth-wrap{
+    /* Viewport units ensure centering works even when the parent has no explicit height */
+    min-height: 100vh;
+    min-height: 100svh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding: 48px 16px;
+  }
+
+  .auth-card{
+    width: 100%;
+    max-width: 420px;
+    border-radius: 18px;
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    box-shadow: 0 14px 50px rgba(0,0,0,.55);
+    border: 1px solid rgba(201,173,106,.45);
+    overflow: hidden;
+  }
+
+  .auth-card .card-body{
+    padding: 28px 26px 24px;
+  }
+
+  .brand-ring{
+    width: 104px;
+    height: 104px;
+    margin: 0 auto 10px;
+    border-radius: 999px;
+    border: 2px solid rgba(201,173,106,.65);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background: rgba(0,0,0,.25);
+  }
+
+  .brand-logo{
+    width: 76px;
+    height: 76px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.12);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+
+  .brand-title{
+    font-weight: 700;
+    letter-spacing: .2px;
+    margin: 8px 0 2px;
+    text-align:center;
+    color: var(--gold);
+  }
+
+  .brand-subtitle{
+    text-align:center;
+    color: var(--muted);
+    margin-bottom: 18px;
+    font-size: .95rem;
+  }
+
+
+  .form-label{
+    margin-bottom: .35rem;
+    font-weight: 600;
+    font-size: .95rem;
+    color: var(--bs-body-color);
+  }
+
+  /* En pantalla de login (fondo oscuro) mantenemos labels claros */
+  .auth-wrap .form-label,
+  .auth-card .form-label{
+    color: rgba(255,255,255,.8);
+  }
+
+
+  .req{
+    color: #ff5b5b;
+    margin-right: .25rem;
+  }
+
+  .auth-input{
+    background: rgba(0,0,0,.25) !important;
+    border: 1px solid rgba(201,173,106,.55) !important;
+    color: var(--text) !important;
+    border-radius: 10px !important;
+    padding: .70rem .90rem !important;
+  }
+
+  .auth-input:focus{
+    box-shadow: 0 0 0 .22rem rgba(201,173,106,.18) !important;
+    border-color: rgba(201,173,106,.85) !important;
+  }
+
+  .input-group-text{
+    background: rgba(0,0,0,.18) !important;
+    border: 1px solid rgba(201,173,106,.55) !important;
+    color: rgba(201,173,106,.92) !important;
+    border-radius: 10px !important;
+  }
+
+  .input-group > .input-group-text:first-child{
+    border-top-right-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+  }
+  .input-group > .auth-input{
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+  }
+
+  .link-muted{
+    color: rgba(255,255,255,.55);
+    text-decoration: none;
+  }
+  .link-muted:hover{
+    color: rgba(255,255,255,.8);
+    text-decoration: underline;
+  }
+
+  .btn-gold{
+    background: linear-gradient(180deg, var(--gold), var(--gold-2));
+    border: 0;
+    color: #111;
+    font-weight: 800;
+    letter-spacing: .8px;
+    border-radius: 10px;
+    padding: .82rem 1rem;
+  }
+  .btn-gold:disabled{
+    opacity: .72;
+  }
+
+  .tiny{
+    font-size: .9rem;
+  }
+
+  .divider{
+    height: 1px;
+    background: rgba(201,173,106,.28);
+    margin: 18px 0 14px;
+  }
+
+  .app-shell{
+    min-height: 100%;
+    padding: 28px 18px;
+  }
+
+  .shell-card{
+    max-width: 980px;
+    margin: 0 auto;
+    border-radius: 18px;
+    background: rgba(15,15,15,.68);
+    border: 1px solid rgba(201,173,106,.22);
+    box-shadow: 0 14px 50px rgba(0,0,0,.55);
+  }
+
+  /* =============================
+     APP MODE (después de login)
+     ============================= */
+  body.app-mode{
+    background: #eef2f6;
+    color: #111;
+  }
+
+  body.app-mode a{ color: inherit; }
+
+  .wbs-layout{
+    min-height: 100vh;
+    display: flex;
+  }
+
+  /* Sidebar */
+  .wbs-sidebar{
+    width: 260px;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(180deg, #0d0f14, #11141b 60%, #0b0d12);
+    border-right: 1px solid rgba(255,255,255,.06);
+    color: rgba(255,255,255,.80);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow: auto;
+  }
+
+  .wbs-brand{
+    padding: 20px 18px 10px;
+    text-align: center;
+  }
+
+  .wbs-brand-badge{
+    width: 88px;
+    height: 88px;
+    border-radius: 999px;
+    margin: 2px auto 10px;
+    border: 2px solid rgba(201,173,106,.75);
+    background: rgba(0,0,0,.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wbs-brand-badge > div{
+    width: 62px;
+    height: 62px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wbs-brand-sep{
+    height: 1px;
+    background: rgba(201,173,106,.22);
+    margin: 12px 14px 6px;
+  }
+
+  .wbs-brand-title{
+    font-weight: 700;
+    color: rgba(201,173,106,.95);
+    margin: 0;
+    font-size: 1.02rem;
+  }
+
+  .wbs-brand-divider{
+    height: 1px;
+    margin: 14px 0 0;
+    background: rgba(201,173,106,.22);
+  }
+
+  .wbs-nav{
+    padding: 10px 10px 14px;
+    flex: 1;
+  }
+
+    /* Sidebar nav buttons */
+  .wbs-navitem{
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 11px 12px;
+    min-height: 48px;
+    border-radius: 14px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.08);
+    color: rgba(255,255,255,.90);
+    font-weight: 700;
+    font-size: .95rem;
+    text-align: left;
+    cursor: pointer;
+    user-select: none;
+    transition: background .15s ease, border-color .15s ease, color .15s ease, transform .02s ease;
+  }
+
+  .wbs-navitem:active{
+    transform: translateY(1px);
+  }
+
+  .wbs-navitem:focus{
+    outline: none;
+  }
+
+  .wbs-navitem:focus-visible{
+    box-shadow: 0 0 0 3px rgba(201,173,106,.28);
+  }
+
+  .wbs-navitem:hover{
+    background: rgba(255,255,255,.07);
+    border-color: rgba(201,173,106,.22);
+    color: rgba(255,255,255,.98);
+  }
+
+  .wbs-navitem.active{
+    background: rgba(201,173,106,.14);
+    border-color: rgba(201,173,106,.40);
+    color: rgba(201,173,106,.98);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.18);
+  }
+
+  .wbs-navitem .bi{
+    width: 20px;
+    text-align: center;
+    font-size: 1.05rem;
+    line-height: 1;
+    color: currentColor;
+    opacity: .95;
+  }
+
+  .wbs-navitem span{
+    flex: 1;
+  }
+
+
+  .wbs-nav-footer{
+    padding: 6px 10px 18px;
+  }
+
+  /* Main */
+  .wbs-main{
+    flex: 1;
+    background: #eef2f6;
+  }
+
+  .wbs-topbar{
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(255,255,255,.82);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(16,24,40,.08);
+  }
+
+  .wbs-topbar-inner{
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+
+  .wbs-topbar-left{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .wbs-topbar-right{
+    flex: 0 0 auto;
+  }
+
+  /* En topbar, las pestañas deben mantenerse en una sola fila (scroll horizontal en móvil) */
+  .wbs-topbar-left .wbs-section-pills{
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .wbs-topbar-left .wbs-section-pills::-webkit-scrollbar{
+    display: none;
+  }
+
+  /* Subnavbar (dinámico por módulo) */
+  .wbs-sectionbar{
+    background: rgba(255,255,255,.82);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(16,24,40,.08);
+  }
+
+  .wbs-sectionbar-inner{
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 10px 18px 12px;
+  }
+
+  .wbs-section-pills{
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .wbs-section-pills .nav-link{
+    border-radius: 999px;
+    padding: 8px 12px;
+    font-weight: 800;
+    font-size: .9rem;
+    color: rgba(16,24,40,.72);
+    border: 1px solid rgba(16,24,40,.10);
+    background: rgba(255,255,255,.65);
+  }
+
+  .wbs-section-pills .nav-link:hover{
+    color: rgba(16,24,40,.92);
+    background: rgba(255,255,255,.9);
+  }
+
+  .wbs-section-pills .nav-link.active{
+    color: rgba(16,24,40,.95);
+    background: rgba(201,173,106,.18);
+    border-color: rgba(201,173,106,.38);
+    box-shadow: 0 6px 20px rgba(16,24,40,.08);
+  }
+
+  .wbs-meta{
+    color: rgba(16,24,40,.55);
+    font-size: .86rem;
+  }
+
+  .wbs-chip{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(16,24,40,.10);
+    background: rgba(255,255,255,.7);
+    color: rgba(16,24,40,.82);
+    font-weight: 600;
+    font-size: .88rem;
+  }
+
+  .wbs-chip-dot{
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(201,173,106,.95);
+    box-shadow: 0 0 0 3px rgba(201,173,106,.18);
+  }
+
+  .wbs-content{
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 18px;
+  }
+
+  .wbs-card{
+    border-radius: 16px;
+    background: #fff;
+    border: 1px solid rgba(16,24,40,.08);
+    box-shadow: 0 10px 30px rgba(16,24,40,.06);
+  }
+
+  .wbs-card .wbs-card-title{
+    font-weight: 700;
+    font-size: 1rem;
+    margin: 0;
+    color: rgba(16,24,40,.92);
+  }
+
+  .wbs-stat{
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(16,24,40,.08);
+    background: #fff;
+    box-shadow: 0 10px 30px rgba(16,24,40,.06);
+  }
+
+  .wbs-stat .label{
+    color: rgba(16,24,40,.60);
+    font-size: .86rem;
+  }
+
+  .wbs-stat .value{
+    font-weight: 800;
+    font-size: 1.35rem;
+    color: rgba(16,24,40,.92);
+    margin-top: 4px;
+  }
+
+  .wbs-stat .sub{
+    color: rgba(16,24,40,.50);
+    font-size: .84rem;
+    margin-top: 2px;
+  }
+
+  .wbs-stat.soft-yellow{ background: linear-gradient(180deg, rgba(201,173,106,.18), #fff 55%); }
+  .wbs-stat.soft-blue{ background: linear-gradient(180deg, rgba(77,147,255,.14), #fff 55%); }
+  .wbs-stat.soft-green{ background: linear-gradient(180deg, rgba(52,211,153,.14), #fff 55%); }
+  .wbs-stat.soft-purple{ background: linear-gradient(180deg, rgba(168,85,247,.12), #fff 55%); }
+
+  .wbs-table thead th{
+    color: rgba(16,24,40,.60);
+    font-size: .82rem;
+    font-weight: 700;
+    border-bottom-color: rgba(16,24,40,.10) !important;
+  }
+  .wbs-table tbody td{
+    border-bottom-color: rgba(16,24,40,.06) !important;
+    color: rgba(16,24,40,.86);
+  }
+
+  .wbs-pill{
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(16,24,40,.10);
+    background: rgba(77,147,255,.10);
+    color: rgba(16,24,40,.75);
+    font-size: .82rem;
+    font-weight: 700;
+  }
+
+  .wbs-footer{
+    text-align: center;
+    padding: 18px 0 6px;
+    color: rgba(16,24,40,.45);
+    font-size: .86rem;
+  }
+
+  @media (max-width: 992px){
+    .wbs-sidebar{ width: 230px; }
+  }
+  @media (max-width: 768px){
+    .wbs-layout{ flex-direction: column; }
+    .wbs-sidebar{
+      width: 100%;
+      height: auto;
+      position: relative;
+    }
+  }
+
+  /* Page container */
+  .wbs-content{
+    padding: 18px 22px;
+  }
+
+  .wbs-page{
+    background: transparent;
+    min-height: calc(100vh - 120px);
+  }
+
+  .wbs-page-title{
+    font-weight: 800;
+    letter-spacing: .2px;
+  }
+
+  /* Topbar */
+  .wbs-topbar{
+    padding: 14px 18px 10px;
+  }
+
+  .wbs-topbar-inner{
+    background: #fff;
+    border: 1px solid rgba(16,24,40,.08);
+    border-top: 4px solid #f2b400;
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(16,24,40,.06);
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .wbs-topbar-title{
+    font-weight: 800;
+    color: rgba(16,24,40,.82);
+  }
+
+  .wbs-user-pill{
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(16,24,40,.04);
+    border: 1px solid rgba(16,24,40,.08);
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-weight: 700;
+    color: rgba(16,24,40,.78);
+  }
+
+  .wbs-user-avatar{
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .75rem;
+    background: #fff;
+    border: 1px solid rgba(16,24,40,.12);
+  }
+
+  .wbs-user-name{
+    font-size: .9rem;
+  }
+
+  .wbs-user-dot{
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: #f2b400;
+    display: inline-block;
+  }
+
+  .wbs-user-pill-btn{
+    cursor: pointer;
+    border: 1px solid rgba(16,24,40,.08);
+    background: rgba(16,24,40,.04);
+  }
+
+  .wbs-user-pill-btn:active{
+    transform: translateY(1px);
+  }
+
+  .wbs-user-caret{
+    font-size: .9rem;
+    margin-left: 2px;
+    opacity: .75;
+  }
+
+  .wbs-user-menu-wrap{
+    position: relative;
+  }
+
+  .wbs-user-menu{
+    position: absolute;
+    right: 0;
+    top: calc(100% + 10px);
+    width: 320px;
+    max-width: min(86vw, 360px);
+    background: #fff;
+    border: 1px solid rgba(16,24,40,.12);
+    border-radius: 16px;
+    box-shadow: 0 18px 45px rgba(16,24,40,.16);
+    padding: 10px 12px;
+    z-index: 1050;
+  }
+
+  .wbs-user-menu-row{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .wbs-user-menu-avatar{
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 900;
+    background: rgba(242,180,0,.15);
+    border: 1px solid rgba(242,180,0,.35);
+    color: rgba(16,24,40,.9);
+  }
+
+  .wbs-user-menu-meta{
+    flex: 1;
+    min-width: 0;
+  }
+
+  .wbs-user-menu-username{
+    font-weight: 900;
+    color: rgba(16,24,40,.9);
+    line-height: 1.05;
+  }
+
+  .wbs-user-menu-fullname{
+    font-size: .88rem;
+    color: rgba(16,24,40,.62);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .wbs-user-menu-logout{
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    border: 1px solid rgba(220,53,69,.25);
+    background: rgba(220,53,69,.06);
+    color: rgba(220,53,69,.95);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wbs-user-menu-logout:active{
+    transform: translateY(1px);
+  }
+
+  @media (max-width: 991.98px){
+    .wbs-user-menu{
+      width: 92vw;
+      right: 0;
+      left: auto;
+    }
+  }
+
+  /* Mobile bottom navigation (solo en pantallas pequeñas) */
+  .wbs-mobile-nav{
+    display: none;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 66px;
+    background: #fff;
+    border-top: 1px solid rgba(16,24,40,.10);
+    z-index: 1030;
+    box-shadow: 0 -10px 30px rgba(16,24,40,.08);
+  }
+
+  .wbs-mnav-item{
+    flex: 1;
+    background: transparent;
+    border: 0;
+    height: 100%;
+    padding: 8px 0 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    color: rgba(16,24,40,.72);
+    font-size: .78rem;
+    font-weight: 700;
+  }
+
+  .wbs-mnav-item i{
+    font-size: 1.25rem;
+    line-height: 1;
+  }
+
+  .wbs-mnav-item.active{
+    color: rgba(16,24,40,.92);
+  }
+
+  .wbs-mnav-item.active i{
+    color: #f2b400;
+  }
+
+  /* Offcanvas */
+  .wbs-more{
+    border-top-left-radius: 18px;
+    border-top-right-radius: 18px;
+  }
+
+  /* Responsive behavior:
+     - Desktop: sidebar visible, mobile nav hidden.
+     - Mobile: sidebar hidden, bottom nav visible.
+  */
+  @media (max-width: 991.98px){
+    /* ======================================================
+       MODO MÓVIL PRO: legibilidad + rendimiento
+       - Aumenta tipografía / targets táctiles para evitar zoom.
+       - Reduce efectos pesados (blur/shadows/transiciones) que
+         suelen causar lentitud al hacer pinch-zoom o scroll.
+       ====================================================== */
+
+    /* Tipografía base más grande en móvil */
+    html{ font-size: 18px; }
+    body.app-mode{ font-size: 1rem; }
+
+    /* Evita que textos auxiliares queden demasiado pequeños */
+    .small, small{ font-size: .95rem !important; }
+
+    /* Controles táctiles más cómodos */
+    .btn{ padding: .65rem .95rem; }
+    .btn-sm{ padding: .60rem .85rem; font-size: 1rem; }
+    .form-control, .form-select{
+      padding: .65rem .85rem;
+      font-size: 1rem;
+    }
+    .form-label{ font-size: .95rem; }
+
+    /* Pestañas del topbar más grandes (y scroll horizontal ya habilitado) */
+    .wbs-section-pills .nav-link{
+      padding: 10px 14px;
+      font-size: 1rem;
+    }
+
+    /* Indicadores/cards más legibles */
+    .wbs-stat{ padding: 16px 16px; }
+    .wbs-stat .label{ font-size: .95rem; }
+    .wbs-stat .value{ font-size: 1.55rem; }
+    .wbs-stat .sub{ font-size: .95rem; }
+
+    /* Tablas (en modales/detalles) más legibles */
+    .wbs-table thead th{ font-size: .92rem; }
+    .wbs-table tbody td{ font-size: 1rem; }
+
+    /* Navbar inferior más visible */
+    .wbs-mobile-nav{ height: 74px; }
+    .wbs-mnav-item{ font-size: .9rem; }
+    .wbs-mnav-item i{ font-size: 1.35rem; }
+
+    /* Modales: aprovechar mejor el ancho en móvil (sin necesidad de zoom) */
+    .modal-dialog{ max-width: 96vw; margin: .65rem auto; }
+    .modal-content{ border-radius: 18px; }
+    .modal-header{ padding: .9rem 1rem; }
+    .modal-body{ padding: 1rem; }
+    .modal-footer{ padding: .9rem 1rem; }
+    .btn-close{ padding: 1rem; }
+
+    /* Rendimiento: desactivar blur y bajar sombras/transiciones en móvil */
+    .wbs-topbar,
+    .wbs-sectionbar{
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      background: rgba(255,255,255,.98) !important;
+    }
+    .wbs-topbar-inner,
+    .wbs-card,
+    .wbs-stat,
+    .wbs-mobile-nav{
+      box-shadow: none !important;
+    }
+    .wbs-navitem,
+    .wbs-section-pills .nav-link,
+    .btn{
+      transition: none !important;
+    }
+    .wbs-sidebar{
+      display: none;
+    }
+
+    .wbs-main{
+      width: 100%;
+    }
+
+    .wbs-content{
+      padding: 14px 14px 86px; /* espacio para nav inferior */
+    }
+
+    .wbs-topbar{
+      position: sticky;
+      top: 0;
+      z-index: 1020;
+      background: transparent;
+      padding: 10px 12px 8px;
+    }
+
+    .wbs-topbar-inner{
+      border-top-width: 3px;
+      border-radius: 14px;
+    }
+
+    .wbs-sectionbar-inner{
+      padding: 10px 14px 12px;
+    }
+
+    .wbs-mobile-nav{
+      display: flex;
+    }
+  }
+
+  /* Mejoras táctiles (móvil): evita retrasos/gestos que bloquean taps */
+  button, .btn, .wbs-navitem, .wbs-mnav-item, .nav-link{
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+</style>

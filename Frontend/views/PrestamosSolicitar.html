@@ -1,0 +1,1368 @@
+<script type="text/babel">
+  /**
+   * View: Préstamos / Solicitar
+   * Parte 1:
+   *  - CRUD de préstamos/solicitudes
+   *  - Genera tabla de amortización (saldo insoluto)
+   *  - Detalle (Resumen + Amortización)
+   */
+
+  const { useEffect, useMemo, useState } = React;
+
+  function bsModalShow(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(el).show();
+      return;
+    }
+
+    try {
+      if (!el.dataset.wbsBindDismiss) {
+        el.dataset.wbsBindDismiss = '1';
+        el.addEventListener('click', (ev) => {
+          const btn = ev.target.closest('[data-bs-dismiss="modal"]');
+          if (btn) {
+            ev.preventDefault();
+            bsModalHide(id);
+          }
+        });
+      }
+
+      el.style.display = 'block';
+      el.classList.add('show');
+      el.removeAttribute('aria-hidden');
+      el.setAttribute('aria-modal', 'true');
+      document.body.classList.add('modal-open');
+
+      const bd = document.createElement('div');
+      bd.className = 'modal-backdrop fade show';
+      bd.dataset.modalFor = id;
+      document.body.appendChild(bd);
+      bd.addEventListener('click', () => bsModalHide(id));
+
+      setTimeout(() => {
+        const focusable = el.querySelector('input, select, textarea, button');
+        if (focusable && focusable.focus) focusable.focus();
+      }, 50);
+    } catch (e) {}
+  }
+
+  function bsModalHide(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (window.bootstrap?.Modal) {
+      const inst = window.bootstrap.Modal.getInstance(el) || window.bootstrap.Modal.getOrCreateInstance(el);
+      inst.hide();
+      return;
+    }
+
+    try {
+      el.classList.remove('show');
+      el.style.display = 'none';
+      el.setAttribute('aria-hidden', 'true');
+      el.removeAttribute('aria-modal');
+
+      document.querySelectorAll('.modal-backdrop').forEach(bd => {
+        if (bd?.dataset?.modalFor === id) bd.remove();
+      });
+      const anyOpen = document.querySelector('.modal.show');
+      if (!anyOpen) document.body.classList.remove('modal-open');
+    } catch (e) {}
+  }
+
+  function _prMoney(n) {
+    const v = Number(n || 0);
+    try {
+      return v.toLocaleString("es-HN", { style: "currency", currency: "HNL" });
+    } catch (e) {
+      return `L. ${v.toFixed(2)}`;
+    }
+  }
+
+  function _prPct(n, digits = 2) {
+    const v = Number(n || 0) * 100;
+    if (!isFinite(v)) return "0%";
+    return `${v.toFixed(digits)}%`;
+  }
+
+  function _prDate(iso) {
+    if (!iso) return "—";
+    try {
+      const [y, m, d] = String(iso).split("-").map(Number);
+      if (!y || !m || !d) return String(iso);
+      const dt = new Date(y, m - 1, d);
+      return dt.toLocaleDateString("es-HN", { year: "numeric", month: "short", day: "2-digit" });
+    } catch (e) {
+      return String(iso);
+    }
+  }
+
+  function _prNowLocalInput() {
+    try {
+      const d = new Date();
+      const z = d.getTimezoneOffset() * 60000;
+      return new Date(d.getTime() - z).toISOString().slice(0, 16);
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function _prEstadoBadge(estado) {
+    const s = String(estado || "").toLowerCase();
+    let cls = "text-bg-secondary";
+    if (s === "borrador") cls = "text-bg-secondary";
+    if (s === "solicitado") cls = "text-bg-info";
+    if (s === "aprobado" || s === "activo") cls = "text-bg-success";
+    if (s === "rechazado") cls = "text-bg-danger";
+    if (s === "finalizado") cls = "text-bg-dark";
+    if (s === "pagado" || s === "pagada") cls = "text-bg-success";
+    if (s === "parcial") cls = "text-bg-warning";
+    if (s === "vencida" || s === "vencido") cls = "text-bg-danger";
+    return <span className={`badge rounded-pill ${cls}`}>{estado || "—"}</span>;
+  }
+
+  function _prClampInt(v, min, max, fallback) {
+    const n = parseInt(String(v || ""), 10);
+    if (isNaN(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function _prNum(v) {
+    if (typeof v === "number") return isNaN(v) ? 0 : v;
+    const s = String(v ?? "").replace(/[^0-9.\-]/g, "");
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function _prRound2(n) {
+    const x = Number(n || 0);
+    return Math.round((x + Number.EPSILON) * 100) / 100;
+  }
+
+  // Calcula amortización (misma lógica de backend: primer pago = próximo mes)
+  function _prBuildAmort({ montoPrincipal, plazoMeses, tasaMensualPct, fechaDesembolso, diaPago }) {
+    const P = _prNum(montoPrincipal);
+    const N = Math.max(1, parseInt(plazoMeses, 10) || 1);
+    const r = _prNum(tasaMensualPct) / 100;
+
+    const computeCuota = () => {
+      if (P <= 0) return 0;
+      if (!r || Math.abs(r) < 1e-12) return P / N;
+      const pow = Math.pow(1 + r, N);
+      return P * r * pow / (pow - 1);
+    };
+    const cuota = _prRound2(computeCuota());
+
+    const iso = String(fechaDesembolso || "").trim();
+    let disb = null;
+    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) disb = new Date(parseInt(m[1],10), parseInt(m[2],10)-1, parseInt(m[3],10));
+    else disb = iso ? new Date(iso) : new Date();
+    if (disb.toString() === "Invalid Date") disb = new Date();
+
+    const dp = _prClampInt(diaPago, 1, 28, 1);
+
+    const daysInMonth = (y, mi) => new Date(y, mi + 1, 0).getDate();
+    const dateWithDay = (y, mi, day) => {
+      const max = daysInMonth(y, mi);
+      return new Date(y, mi, Math.min(Math.max(1, day), max));
+    };
+
+    let y = disb.getFullYear();
+    let mi = disb.getMonth() + 1;
+    if (mi > 11) { mi = 0; y += 1; }
+    let dtPago = dateWithDay(y, mi, dp);
+    const toIso = (d) => {
+      const yy = d.getFullYear();
+      const mm = ("0" + (d.getMonth() + 1)).slice(-2);
+      const dd = ("0" + d.getDate()).slice(-2);
+      return `${yy}-${mm}-${dd}`;
+    };
+
+    const cuotas = [];
+    let saldo = P;
+    let totalInteres = 0;
+    for (let i = 1; i <= N; i++) {
+      const interes = _prRound2(saldo * r);
+      let capital = _prRound2(cuota - interes);
+      if (i === N) capital = _prRound2(saldo);
+      saldo = _prRound2(Math.max(0, saldo - capital));
+      totalInteres = _prRound2(totalInteres + interes);
+
+      const cuotaReal = (i === N) ? _prRound2(capital + interes) : cuota;
+      cuotas.push({
+        nroCuota: i,
+        fechaPago: toIso(dtPago),
+        cuota: cuotaReal,
+        interesCorriente: interes,
+        capital,
+        saldoDespues: saldo,
+        estado: "Pendiente",
+      });
+
+      // siguiente mes
+      let yy = dtPago.getFullYear();
+      let mm = dtPago.getMonth() + 1;
+      if (mm > 11) { mm = 0; yy += 1; }
+      dtPago = dateWithDay(yy, mm, dp);
+    }
+
+    return { cuotaMensual: cuota, totalInteres, cuotas };
+  }
+
+  function PrestamosSolicitarView({ user }) {
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const [items, setItems] = useState([]);
+    const [personas, setPersonas] = useState([]);
+
+    // filtros
+    const [fPersonaId, setFPersonaId] = useState("");
+    const [fEstado, setFEstado] = useState("");
+    const [fFrom, setFFrom] = useState("");
+    const [fTo, setFTo] = useState("");
+    const [q, setQ] = useState("");
+
+    // modal form
+    const emptyForm = {
+      idPrestamo: "",
+      idPersona: "",
+      montoPrincipal: "",
+      plazoMeses: 12,
+      tasaMensualPct: 3,
+      moratorioModo: "25", // 25 | 50 | manual
+      tasaMoratoriaMensualPct: "", // solo manual
+      adminTipo: "fijo", // fijo | porcentaje
+      adminValor: 0,
+      fechaDesembolso: "",
+      diaCorte: 1,
+      diaPago: 15,
+      estado: "Activo",
+    };
+    const [form, setForm] = useState({ ...emptyForm });
+    const [showAmortPreview, setShowAmortPreview] = useState(false);
+
+    // detalle
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [detailError, setDetailError] = useState("");
+    const [detail, setDetail] = useState({ prestamo: null, cuotas: [], pagos: [], resumen: null });
+
+    // pago (Parte 2)
+    const [pagoSaving, setPagoSaving] = useState(false);
+    const [pagoMsg, setPagoMsg] = useState("");
+    const [pagoErr, setPagoErr] = useState("");
+    const [pagoForm, setPagoForm] = useState({
+      fechaHora: "",
+      monto: "",
+      metodo: "Efectivo",
+      referencia: "",
+      nota: "",
+    });
+
+    const personaById = useMemo(() => {
+      const map = {};
+      (personas || []).forEach(p => { map[String(p.id || "").trim()] = p; });
+      return map;
+    }, [personas]);
+
+    const filtered = useMemo(() => items || [], [items]);
+
+    const stats = useMemo(() => {
+      const list = filtered || [];
+      const count = list.length;
+      const activos = list.filter(it => String(it.estadoSistema || it.estado || "").toLowerCase() === "activo").length;
+      const finalizados = list.filter(it => String(it.estadoSistema || it.estado || "").toLowerCase() === "finalizado").length;
+      const saldoInsoluto = list.reduce((a, it) => a + _prNum(it.saldoInsoluto), 0);
+      const cuotasVencidas = list.reduce((a, it) => a + (parseInt(it.cuotasVencidas, 10) || 0), 0);
+      const montoVencido = list.reduce((a, it) => a + _prNum(it.montoVencido), 0);
+
+      // Próximas cuotas: ventana 30 días
+      const today = new Date();
+      const today0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const within = (iso, days) => {
+        if (!iso) return false;
+        const [y, m, d] = String(iso).split("-").map(Number);
+        if (!y || !m || !d) return false;
+        const dt = new Date(y, m - 1, d);
+        const dt0 = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+        const diff = Math.floor((dt0.getTime() - today0.getTime()) / 86400000);
+        return diff >= 0 && diff <= days;
+      };
+      const proximasCount = list.filter(it => within(it.proximaCuotaFecha, 30) && _prNum(it.proximaCuotaMonto) > 0).length;
+      const proximasMonto = list.reduce((a, it) => a + (within(it.proximaCuotaFecha, 30) ? _prNum(it.proximaCuotaMonto) : 0), 0);
+
+      return { count, activos, finalizados, saldoInsoluto, cuotasVencidas, montoVencido, proximasCount, proximasMonto };
+    }, [filtered]);
+
+    function exportCsv() {
+      const rows = filtered || [];
+      if (!rows.length) return;
+      const cols = [
+        { k: "personaNombre", h: "Persona" },
+        { k: "idPersona", h: "ID Persona" },
+        { k: "idPrestamo", h: "ID Préstamo" },
+        { k: "estadoSistema", h: "Estado" },
+        { k: "montoPrincipal", h: "Principal" },
+        { k: "saldoInsoluto", h: "Saldo insoluto" },
+        { k: "totalPendiente", h: "Pendiente total" },
+        { k: "montoVencido", h: "Monto vencido" },
+        { k: "cuotasVencidas", h: "Cuotas vencidas" },
+        { k: "proximaCuotaFecha", h: "Próxima cuota fecha" },
+        { k: "proximaCuotaMonto", h: "Próxima cuota monto" },
+      ];
+      const esc = (v) => {
+        const s = String(v ?? "").replace(/\r?\n/g, " ");
+        if (/[",]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+        return s;
+      };
+      const csv = [cols.map(c => esc(c.h)).join(",")]
+        .concat(rows.map(r => cols.map(c => esc(r?.[c.k] ?? "")).join(",")))
+        .join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `prestamos_${new Date().toISOString().slice(0,10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function printTable() {
+      const rows = filtered || [];
+      const now = new Date();
+      const title = "Préstamos - Tabla";
+      const fmt = (n) => _prMoney(n);
+      const html = `<!doctype html>
+        <html lang="es">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>${title}</title>
+          <style>
+            body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;color:#111}
+            h1{font-size:18px;margin:0 0 6px}
+            .meta{color:#666;font-size:12px;margin-bottom:14px}
+            table{width:100%;border-collapse:collapse;font-size:12px}
+            th,td{border:1px solid #ddd;padding:8px;vertical-align:top}
+            th{background:#f6f6f6;text-align:left}
+            .right{text-align:right}
+            .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#f0f0f0;font-size:11px}
+            @media print{
+              .no-print{display:none !important}
+              body{margin:0}
+              th{background:#eee !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+            }
+          </style>
+        </head>
+        <body>
+          <div class="no-print" style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:10px">
+            <button onclick="window.print()" style="padding:8px 12px">Imprimir / Guardar PDF</button>
+            <button onclick="window.close()" style="padding:8px 12px">Cerrar</button>
+          </div>
+          <h1>${title}</h1>
+          <div class="meta">Generado: ${now.toLocaleString("es-HN")}</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Persona</th>
+                <th>Estado</th>
+                <th class="right">Principal</th>
+                <th class="right">Saldo insoluto</th>
+                <th>Próxima cuota</th>
+                <th>Vencidos</th>
+                <th class="right">Pendiente total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(r => {
+                const persona = (r.personaNombre || "—");
+                const estado = (r.estadoSistema || r.estado || "—");
+                const prox = r.proximaCuotaFecha ? `${r.proximaCuotaFecha} • ${fmt(r.proximaCuotaMonto)}` : "—";
+                const venc = (parseInt(r.cuotasVencidas,10)||0) ? `${r.cuotasVencidas} • ${fmt(r.montoVencido)}` : "0";
+                return `<tr>
+                  <td>${persona}<div style="color:#666;font-size:11px">ID: ${String(r.idPersona||"")}</div></td>
+                  <td><span class="pill">${estado}</span></td>
+                  <td class="right">${fmt(r.montoPrincipal)}</td>
+                  <td class="right">${fmt(r.saldoInsoluto)}</td>
+                  <td>${prox}</td>
+                  <td>${venc}</td>
+                  <td class="right">${fmt(r.totalPendiente)}</td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </body>
+        </html>`;
+      const w = window.open("", "_blank");
+      if (!w) return;
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+    }
+
+    const amortPreview = useMemo(() => {
+      const fp = { ...form };
+      const fecha = fp.fechaDesembolso || new Date().toISOString().slice(0, 10);
+      const a = _prBuildAmort({
+        montoPrincipal: fp.montoPrincipal,
+        plazoMeses: fp.plazoMeses,
+        tasaMensualPct: fp.tasaMensualPct,
+        fechaDesembolso: fecha,
+        diaPago: fp.diaPago,
+      });
+
+      // admin
+      const P = _prNum(fp.montoPrincipal);
+      const adminV = _prNum(fp.adminValor);
+      const adminMonto = (fp.adminTipo === "porcentaje") ? _prRound2(P * (adminV / 100)) : _prRound2(adminV);
+      const totalPagar = _prRound2(P + _prNum(a.totalInteres) + adminMonto);
+
+      // mora
+      const r = _prNum(fp.tasaMensualPct) / 100;
+      let moraMensual = 0;
+      if (fp.moratorioModo === "manual") moraMensual = _prNum(fp.tasaMoratoriaMensualPct) / 100;
+      else if (fp.moratorioModo === "50") moraMensual = r * 1.5;
+      else moraMensual = r * 1.25;
+
+      return {
+        cuotaMensual: a.cuotaMensual,
+        totalInteres: a.totalInteres,
+        adminMonto,
+        totalPagar,
+        moraMensual,
+        cuotas: a.cuotas,
+      };
+    }, [form]);
+
+    async function loadPersonas() {
+      try {
+        const res = await gasCall("listarPersonasActivas");
+        const raw = Array.isArray(res) ? res : [];
+        const norm = raw
+          .map(p => ({
+            id: String(p?.id || p?.id_persona || p?.persona_id || "").trim(),
+            nombre: String(p?.nombre || p?.nombre_persona || p?.persona || "").trim(),
+          }))
+          .filter(p => p.id && p.nombre);
+
+        // orden
+        norm.sort((a, b) => a.nombre.localeCompare(b.nombre));
+        setPersonas(norm);
+      } catch (e) {
+        // si falla, igual deja la vista operativa
+        setPersonas([]);
+      }
+    }
+
+    async function loadPrestamos() {
+      setLoading(true);
+      setError("");
+      try {
+        const params = {
+          personaId: fPersonaId,
+          estado: fEstado,
+          fechaFrom: fFrom,
+          fechaTo: fTo,
+          q,
+        };
+        const res = await gasCall("listarPrestamos", params);
+        setItems(Array.isArray(res) ? res : []);
+      } catch (e) {
+        setError(String(e?.message || e));
+        setItems([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    useEffect(() => {
+      loadPersonas();
+      // primera carga
+      loadPrestamos();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // recargar con debounce simple
+    useEffect(() => {
+      const t = setTimeout(() => loadPrestamos(), 250);
+      return () => clearTimeout(t);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fPersonaId, fEstado, fFrom, fTo, q]);
+
+    function openNew() {
+      setError("");
+      setForm({
+        ...emptyForm,
+        fechaDesembolso: new Date().toISOString().slice(0, 10),
+      });
+      setShowAmortPreview(false);
+      bsModalShow("modalPrestamoForm");
+    }
+
+    function openEdit(it) {
+      setError("");
+      const tasaPct = _prRound2(_prNum(it.tasaMensual) * 100);
+      const moraPct = _prRound2(_prNum(it.tasaMoratoriaMensual) * 100);
+
+      setForm({
+        idPrestamo: it.idPrestamo || "",
+        idPersona: it.idPersona || "",
+        montoPrincipal: it.montoPrincipal ?? "",
+        plazoMeses: it.plazoMeses ?? 12,
+        tasaMensualPct: tasaPct,
+        moratorioModo: it.moratorioModo || "25",
+        tasaMoratoriaMensualPct: (it.moratorioModo === "manual") ? moraPct : "",
+        adminTipo: it.adminTipo || "fijo",
+        adminValor: it.adminValor ?? 0,
+        fechaDesembolso: it.fechaDesembolso || new Date().toISOString().slice(0, 10),
+        diaCorte: it.diaCorte || 1,
+        diaPago: it.diaPago || 15,
+        estado: it.estado || "Borrador",
+      });
+      setShowAmortPreview(false);
+      bsModalShow("modalPrestamoForm");
+    }
+
+    async function openDetail(it) {
+      setDetailLoading(true);
+      setDetailError("");
+      setDetail({ prestamo: null, cuotas: [], pagos: [], resumen: null });
+      setPagoMsg("");
+      setPagoErr("");
+      setPagoForm({
+        fechaHora: _prNowLocalInput(),
+        monto: "",
+        metodo: "Efectivo",
+        referencia: "",
+        nota: "",
+      });
+      bsModalShow("modalPrestamoDetalle");
+      try {
+        const res = await gasCall("obtenerDetallePrestamo", it.idPrestamo);
+        setDetail({
+          prestamo: res?.prestamo || null,
+          cuotas: Array.isArray(res?.cuotas) ? res.cuotas : [],
+          pagos: Array.isArray(res?.pagos) ? res.pagos : [],
+          resumen: res?.resumen || null,
+        });
+      } catch (e) {
+        setDetailError(String(e?.message || e));
+      } finally {
+        setDetailLoading(false);
+      }
+    }
+
+    async function registrarPago() {
+      if (!detail?.prestamo?.idPrestamo) return;
+      setPagoSaving(true);
+      setPagoMsg("");
+      setPagoErr("");
+      try {
+        const payload = {
+          idPrestamo: detail.prestamo.idPrestamo,
+          fechaHora: String(pagoForm.fechaHora || "").trim(),
+          monto: _prNum(pagoForm.monto),
+          metodo: String(pagoForm.metodo || "").trim(),
+          referencia: String(pagoForm.referencia || "").trim(),
+          nota: String(pagoForm.nota || "").trim(),
+          user: user?.nombre_usuario || user?.nombreCompleto || "",
+        };
+        const res = await gasCall("registrarPagoPrestamo", payload);
+        if (!res?.ok) throw new Error(res?.message || "No se pudo registrar el pago.");
+        setPagoMsg(`Pago registrado. Mora: ${_prMoney(res.moratorioCobrado)} • Interés: ${_prMoney(res.interesCobrado)} • Capital: ${_prMoney(res.capitalCobrado)}${res.saldoFavor ? ` • Saldo a favor: ${_prMoney(res.saldoFavor)}` : ""}`);
+
+        // Recargar detalle
+        const det = await gasCall("obtenerDetallePrestamo", detail.prestamo.idPrestamo);
+        setDetail({
+          prestamo: det?.prestamo || null,
+          cuotas: Array.isArray(det?.cuotas) ? det.cuotas : [],
+          pagos: Array.isArray(det?.pagos) ? det.pagos : [],
+          resumen: det?.resumen || null,
+        });
+        // reset monto
+        setPagoForm(f => ({ ...f, monto: "", referencia: "", nota: "", fechaHora: _prNowLocalInput() }));
+      } catch (e) {
+        setPagoErr(String(e?.message || e));
+      } finally {
+        setPagoSaving(false);
+      }
+    }
+
+    async function handleSave(nextEstado) {
+      setSaving(true);
+      setError("");
+      try {
+        const p = personaById[String(form.idPersona || "").trim()];
+        const personaNombre = p?.nombre || "";
+        const payload = {
+          idPrestamo: String(form.idPrestamo || "").trim(),
+          idPersona: String(form.idPersona || "").trim(),
+          personaNombre,
+          montoPrincipal: _prNum(form.montoPrincipal),
+          plazoMeses: _prClampInt(form.plazoMeses, 1, 360, 1),
+          tasaMensual: _prNum(form.tasaMensualPct) / 100,
+          moratorioModo: form.moratorioModo,
+          tasaMoratoriaMensual: (form.moratorioModo === "manual") ? (_prNum(form.tasaMoratoriaMensualPct) / 100) : "",
+          adminTipo: form.adminTipo,
+          adminValor: _prNum(form.adminValor),
+          fechaDesembolso: String(form.fechaDesembolso || "").trim(),
+          diaCorte: _prClampInt(form.diaCorte, 1, 28, 1),
+          diaPago: _prClampInt(form.diaPago, 1, 28, 1),
+          estado: nextEstado,
+          user: user?.nombre_usuario || user?.nombreCompleto || "",
+        };
+
+        const res = await gasCall("guardarPrestamo", payload);
+        if (!res?.ok) throw new Error(res?.message || "No se pudo guardar.");
+        bsModalHide("modalPrestamoForm");
+        await loadPrestamos();
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    async function handleDelete(it) {
+      const ok = window.confirm(`¿Eliminar el préstamo ${String(it.idPrestamo || "").slice(0,8)}?`);
+      if (!ok) return;
+      setLoading(true);
+      setError("");
+      try {
+        const res = await gasCall("eliminarPrestamo", it.idPrestamo);
+        if (!res?.ok) throw new Error(res?.message || "No se pudo eliminar.");
+        await loadPrestamos();
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    return (
+      <div className="wbs-page">
+        <div className="d-flex flex-wrap align-items-end justify-content-between gap-2">
+          <div>
+            <h2 className="wbs-page-title mb-0">Solicitar Préstamo</h2>
+            <div className="text-muted mt-1">Registra solicitudes y genera la tabla de amortización (saldo insoluto).</div>
+          </div>
+          <div className="d-flex gap-2">
+            <button className="btn btn-gold" onClick={openNew}>
+              <i className="bi bi-plus-lg me-2"></i>Nueva solicitud
+            </button>
+          </div>
+        </div>
+
+        {/* Stats */}
+        <div className="row g-3 mt-1">
+          <div className="col-6 col-lg-3">
+            <div className="wbs-stat soft-blue">
+              <div className="label">Préstamos activos</div>
+              <div className="value">{stats.activos}</div>
+              <div className="sub">Finalizados: {stats.finalizados} • Total: {stats.count}</div>
+            </div>
+          </div>
+          <div className="col-6 col-lg-3">
+            <div className="wbs-stat soft-purple">
+              <div className="label">Saldo insoluto</div>
+              <div className="value">{_prMoney(stats.saldoInsoluto)}</div>
+              <div className="sub">capital pendiente</div>
+            </div>
+          </div>
+          <div className="col-6 col-lg-3">
+            <div className="wbs-stat soft-green">
+              <div className="label">Próximas cuotas</div>
+              <div className="value">{stats.proximasCount}</div>
+              <div className="sub">30 días: {_prMoney(stats.proximasMonto)}</div>
+            </div>
+          </div>
+          <div className="col-6 col-lg-3">
+            <div className="wbs-stat soft-yellow">
+              <div className="label">Vencidas</div>
+              <div className="value">{stats.cuotasVencidas}</div>
+              <div className="sub">Monto vencido: {_prMoney(stats.montoVencido)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="wbs-card p-3 mt-3">
+          <div className="row g-2 align-items-end">
+            <div className="col-12 col-md-4">
+              <label className="form-label tiny">Persona</label>
+              <select className="form-select" value={fPersonaId} onChange={(e)=>setFPersonaId(e.target.value)}>
+                <option value="">Todas</option>
+                {personas.map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre}</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-6 col-md-2">
+              <label className="form-label tiny">Estado</label>
+              <select className="form-select" value={fEstado} onChange={(e)=>setFEstado(e.target.value)}>
+                <option value="">Todos</option>
+                <option value="Borrador">Borrador</option>
+                <option value="Solicitado">Solicitado</option>
+                <option value="Aprobado">Aprobado</option>
+                <option value="Activo">Activo</option>
+                <option value="Finalizado">Finalizado</option>
+                <option value="Rechazado">Rechazado</option>
+              </select>
+            </div>
+            <div className="col-6 col-md-2">
+              <label className="form-label tiny">Desde</label>
+              <input className="form-control" type="date" value={fFrom} onChange={(e)=>setFFrom(e.target.value)} />
+            </div>
+            <div className="col-6 col-md-2">
+              <label className="form-label tiny">Hasta</label>
+              <input className="form-control" type="date" value={fTo} onChange={(e)=>setFTo(e.target.value)} />
+            </div>
+            <div className="col-6 col-md-2">
+              <label className="form-label tiny">Buscar</label>
+              <input className="form-control" placeholder="Nombre o ID" value={q} onChange={(e)=>setQ(e.target.value)} />
+            </div>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="alert alert-danger mt-3 py-2" role="alert">
+            <i className="bi bi-exclamation-triangle me-2"></i>{error}
+          </div>
+        ) : null}
+
+        {/* Table */}
+        <div className="wbs-card p-0 mt-3">
+          <div className="p-3 border-bottom d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div className="fw-bold">Listado</div>
+            <div className="d-flex align-items-center gap-2 ms-auto">
+              <div className="tiny text-muted me-1">
+                {loading ? <SpinnerInline label="Cargando..." /> : `${filtered.length} registro(s)`}
+              </div>
+              <div className="btn-group btn-group-sm" role="group" aria-label="Exportar">
+                <button className="btn btn-outline-dark" onClick={printTable} title="Imprimir / Guardar PDF">
+                  <i className="bi bi-printer me-1"></i>Imprimir/Exportar
+                </button>
+                <button className="btn btn-outline-dark" onClick={exportCsv} title="Exportar CSV">
+                  <i className="bi bi-filetype-csv"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="table-responsive">
+            <table className="table table-hover wbs-table align-middle mb-0">
+              <thead>
+                <tr>
+                  <th style={{width: 120}}>ID</th>
+                  <th>Persona</th>
+                  <th style={{width: 170}}>Saldo insoluto</th>
+                  <th style={{width: 190}}>Próxima cuota</th>
+                  <th style={{width: 180}}>Vencidos</th>
+                  <th style={{width: 120}}>Estado</th>
+                  <th style={{width: 200}} className="text-end">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 && !loading ? (
+                  <tr>
+                    <td colSpan={7} className="text-center text-muted py-4">No hay datos para mostrar.</td>
+                  </tr>
+                ) : null}
+
+                {filtered.map(it => (
+                  <tr key={it.idPrestamo}>
+                    <td>
+                      <span className="wbs-pill">{String(it.idPrestamo || "").slice(0, 8)}</span>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{it.personaNombre || personaById[it.idPersona]?.nombre || "—"}</div>
+                      <div className="tiny text-muted">ID: {it.idPersona || "—"}</div>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{_prMoney(it.saldoInsoluto || 0)}</div>
+                      <div className="tiny text-muted">Pendiente: {_prMoney(it.totalPendiente || 0)}</div>
+                    </td>
+                    <td>
+                      {it.proximaCuotaFecha ? (
+                        <>
+                          <div className="fw-semibold">{_prDate(it.proximaCuotaFecha)}</div>
+                          <div className="tiny text-muted">{_prMoney(it.proximaCuotaMonto || 0)}</div>
+                        </>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{it.cuotasVencidas || 0}</div>
+                      <div className="tiny text-muted">{_prMoney(it.montoVencido || 0)}</div>
+                    </td>
+                    <td>{_prEstadoBadge(it.estadoSistema || it.estado)}</td>
+                    <td className="text-end">
+                      <div className="btn-group btn-group-sm" role="group" aria-label="Acciones">
+                        <button className="btn btn-outline-dark" onClick={() => openDetail(it)}>
+                          <i className="bi bi-eye"></i>
+                        </button>
+                        <button className="btn btn-outline-dark" onClick={() => openEdit(it)}>
+                          <i className="bi bi-pencil"></i>
+                        </button>
+                        <button className="btn btn-outline-danger" onClick={() => handleDelete(it)}>
+                          <i className="bi bi-trash"></i>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Modal: Form */}
+        <div className="modal fade" id="modalPrestamoForm" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-lg modal-dialog-scrollable">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">{form.idPrestamo ? "Editar solicitud" : "Nueva solicitud"}</h5>
+                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div className="modal-body">
+
+                <div className="row g-2">
+                  <div className="col-12 col-md-7">
+                    <label className="form-label tiny">Persona (deudor)</label>
+                    <select className="form-select" value={form.idPersona} onChange={(e)=>setForm(f=>({...f, idPersona: e.target.value}))}>
+                      <option value="">Selecciona…</option>
+                      {personas.map(p => (
+                        <option key={p.id} value={p.id}>{p.nombre}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-6 col-md-5">
+                    <label className="form-label tiny">Fecha desembolso</label>
+                    <input className="form-control" type="date" value={form.fechaDesembolso} onChange={(e)=>setForm(f=>({...f, fechaDesembolso: e.target.value}))} />
+                  </div>
+
+                  <div className="col-6 col-md-4">
+                    <label className="form-label tiny">Monto (principal)</label>
+                    <input className="form-control" inputMode="decimal" value={form.montoPrincipal} onChange={(e)=>setForm(f=>({...f, montoPrincipal: e.target.value}))} placeholder="Ej. 5000" />
+                  </div>
+                  <div className="col-6 col-md-4">
+                    <label className="form-label tiny">Plazo (meses)</label>
+                    <input className="form-control" type="number" min="1" value={form.plazoMeses} onChange={(e)=>setForm(f=>({...f, plazoMeses: e.target.value}))} />
+                  </div>
+                  <div className="col-12 col-md-4">
+                    <label className="form-label tiny">Tasa corriente mensual (%)</label>
+                    <input className="form-control" inputMode="decimal" value={form.tasaMensualPct} onChange={(e)=>setForm(f=>({...f, tasaMensualPct: e.target.value}))} placeholder="Ej. 3" />
+                  </div>
+
+                  <div className="col-12 col-md-6">
+                    <label className="form-label tiny">Interés moratorio</label>
+                    <select className="form-select" value={form.moratorioModo} onChange={(e)=>setForm(f=>({...f, moratorioModo: e.target.value}))}>
+                      <option value="25">25% sobre la tasa corriente</option>
+                      <option value="50">50% sobre la tasa corriente</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                    <div className="tiny text-muted mt-1">Se aplicará solo sobre saldo vencido (Parte 2).</div>
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label tiny">Tasa moratoria mensual (%)</label>
+                    {form.moratorioModo === "manual" ? (
+                      <input className="form-control" inputMode="decimal" value={form.tasaMoratoriaMensualPct} onChange={(e)=>setForm(f=>({...f, tasaMoratoriaMensualPct: e.target.value}))} placeholder="Ej. 4.5" />
+                    ) : (
+                      <input className="form-control" value={_prPct(amortPreview.moraMensual)} disabled />
+                    )}
+                  </div>
+
+                  <div className="col-12 col-md-6">
+                    <label className="form-label tiny">Gasto administrativo</label>
+                    <div className="input-group">
+                      <select className="form-select" value={form.adminTipo} onChange={(e)=>setForm(f=>({...f, adminTipo: e.target.value}))}>
+                        <option value="fijo">Fijo (L)</option>
+                        <option value="porcentaje">% del monto</option>
+                      </select>
+                      <input className="form-control" inputMode="decimal" value={form.adminValor} onChange={(e)=>setForm(f=>({...f, adminValor: e.target.value}))} placeholder={form.adminTipo === "porcentaje" ? "Ej. 2" : "Ej. 500"} />
+                    </div>
+                    <div className="tiny text-muted mt-1">Calculado: <b>{_prMoney(amortPreview.adminMonto)}</b></div>
+                  </div>
+                  <div className="col-6 col-md-3">
+                    <label className="form-label tiny">Día de corte</label>
+                    <input className="form-control" type="number" min="1" max="28" value={form.diaCorte} onChange={(e)=>setForm(f=>({...f, diaCorte: e.target.value}))} />
+                  </div>
+                  <div className="col-6 col-md-3">
+                    <label className="form-label tiny">Día de pago</label>
+                    <input className="form-control" type="number" min="1" max="28" value={form.diaPago} onChange={(e)=>setForm(f=>({...f, diaPago: e.target.value}))} />
+                  </div>
+                </div>
+
+                <div className="wbs-card p-3 mt-3" style={{background:"linear-gradient(180deg, rgba(77,147,255,.08), #fff 55%)"}}>
+                  <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <div>
+                      <div className="fw-bold">Preview</div>
+                      <div className="tiny text-muted">Estimación sin mora (saldo insoluto).</div>
+                    </div>
+                    <button type="button" className="btn btn-outline-dark btn-sm" onClick={()=>setShowAmortPreview(v=>!v)}>
+                      <i className={`bi ${showAmortPreview ? "bi-chevron-up" : "bi-chevron-down"} me-1`}></i>
+                      {showAmortPreview ? "Ocultar" : "Ver"} amortización
+                    </button>
+                  </div>
+
+                  <div className="row g-2 mt-1">
+                    <div className="col-6 col-md-3">
+                      <div className="tiny text-muted">Cuota mensual</div>
+                      <div className="fw-bold">{_prMoney(amortPreview.cuotaMensual)}</div>
+                    </div>
+                    <div className="col-6 col-md-3">
+                      <div className="tiny text-muted">Interés total</div>
+                      <div className="fw-bold">{_prMoney(amortPreview.totalInteres)}</div>
+                    </div>
+                    <div className="col-6 col-md-3">
+                      <div className="tiny text-muted">Administrativo</div>
+                      <div className="fw-bold">{_prMoney(amortPreview.adminMonto)}</div>
+                    </div>
+                    <div className="col-6 col-md-3">
+                      <div className="tiny text-muted">Total a pagar</div>
+                      <div className="fw-bold">{_prMoney(amortPreview.totalPagar)}</div>
+                    </div>
+                  </div>
+
+                  {showAmortPreview ? (
+                    <div className="table-responsive mt-2">
+                      <table className="table table-sm wbs-table align-middle mb-0">
+                        <thead>
+                          <tr>
+                            <th style={{width: 80}}>#</th>
+                            <th style={{width: 140}}>Fecha</th>
+                            <th style={{width: 140}}>Cuota</th>
+                            <th style={{width: 140}}>Interés</th>
+                            <th style={{width: 140}}>Capital</th>
+                            <th style={{width: 160}}>Saldo</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {amortPreview.cuotas.map(c => (
+                            <tr key={c.nroCuota}>
+                              <td>{c.nroCuota}</td>
+                              <td>{_prDate(c.fechaPago)}</td>
+                              <td>{_prMoney(c.cuota)}</td>
+                              <td>{_prMoney(c.interesCorriente)}</td>
+                              <td>{_prMoney(c.capital)}</td>
+                              <td>{_prMoney(c.saldoDespues)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                </div>
+
+                {error ? (
+                  <div className="alert alert-danger mt-3 py-2" role="alert">
+                    <i className="bi bi-exclamation-triangle me-2"></i>{error}
+                  </div>
+                ) : null}
+
+              </div>
+              <div className="modal-footer d-flex flex-wrap justify-content-between gap-2">
+                <button type="button" className="btn btn-outline-dark" data-bs-dismiss="modal">Cerrar</button>
+                <div className="d-flex gap-2">
+                  <button type="button" className="btn btn-outline-dark" disabled={saving} onClick={()=>handleSave("Borrador")}>
+                    {saving ? <SpinnerInline label="Guardando..." /> : "Guardar borrador"}
+                  </button>
+                  <button type="button" className="btn btn-gold" disabled={saving} onClick={()=>handleSave("Solicitado")}>
+                    {saving ? <SpinnerInline label="Guardando..." /> : "Solicitar"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Modal: Detalle */}
+        <div className="modal fade" id="modalPrestamoDetalle" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-xl modal-dialog-scrollable">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Detalle del préstamo</h5>
+                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div className="modal-body">
+                {detailLoading ? (
+                  <div className="py-4 text-center">
+                    <SpinnerInline label="Cargando detalle..." />
+                  </div>
+                ) : detailError ? (
+                  <div className="alert alert-danger py-2" role="alert">
+                    <i className="bi bi-exclamation-triangle me-2"></i>{detailError}
+                  </div>
+                ) : !detail?.prestamo ? (
+                  <div className="text-muted">Sin detalle.</div>
+                ) : (
+                  <>
+                    <div className="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-2">
+                      <div>
+                        <div className="fw-bold">
+                          {detail.prestamo.personaNombre || personaById[detail.prestamo.idPersona]?.nombre || "—"}
+                        </div>
+                        <div className="tiny text-muted">Préstamo: {String(detail.prestamo.idPrestamo || "").slice(0, 8)} • {detail.prestamo.estadoSistema || detail.prestamo.estado}</div>
+                      </div>
+                      <div className="text-end">
+                        <div className="tiny text-muted">Cuota mensual</div>
+                        <div className="fw-bold">{_prMoney(detail.prestamo.cuotaMensual)}</div>
+                      </div>
+                    </div>
+
+                    <ul className="nav nav-pills wbs-section-pills mb-3" role="tablist">
+                      <li className="nav-item" role="presentation">
+                        <button className="nav-link active" data-bs-toggle="pill" data-bs-target="#prResumen" type="button" role="tab">
+                          Resumen
+                        </button>
+                      </li>
+                      <li className="nav-item" role="presentation">
+                        <button className="nav-link" data-bs-toggle="pill" data-bs-target="#prAmort" type="button" role="tab">
+                          Amortización
+                        </button>
+                      </li>
+                      <li className="nav-item" role="presentation">
+                        <button className="nav-link" data-bs-toggle="pill" data-bs-target="#prPagos" type="button" role="tab">
+                          Pagos
+                        </button>
+                      </li>
+                    </ul>
+
+                    <div className="tab-content">
+                      <div className="tab-pane fade show active" id="prResumen" role="tabpanel">
+                        <div className="row g-3">
+                          <div className="col-12 col-lg-7">
+                            <div className="wbs-card p-3">
+                              <div className="fw-bold mb-2">Datos</div>
+                              <div className="row g-2">
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Monto</div>
+                                  <div className="fw-semibold">{_prMoney(detail.prestamo.montoPrincipal)}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Plazo</div>
+                                  <div className="fw-semibold">{detail.prestamo.plazoMeses} мес.</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Tasa mensual</div>
+                                  <div className="fw-semibold">{_prPct(detail.prestamo.tasaMensual)}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Tasa moratoria</div>
+                                  <div className="fw-semibold">{_prPct(detail.prestamo.tasaMoratoriaMensual)}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Administrativo</div>
+                                  <div className="fw-semibold">{_prMoney(detail.prestamo.adminMonto)}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Total a pagar</div>
+                                  <div className="fw-semibold">{_prMoney(detail.prestamo.totalPagarEstimado)}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Saldo insoluto</div>
+                                  <div className="fw-semibold">{_prMoney(detail.resumen?.saldoInsoluto || 0)}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Pendiente total</div>
+                                  <div className="fw-semibold">{_prMoney(detail.resumen?.totalPendiente || 0)}</div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="col-12 col-lg-5">
+                            <div className="wbs-card p-3">
+                              <div className="fw-bold mb-2">Calendario</div>
+                              <div className="row g-2">
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Desembolso</div>
+                                  <div className="fw-semibold">{_prDate(detail.prestamo.fechaDesembolso)}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Primer pago</div>
+                                  <div className="fw-semibold">{_prDate(detail.prestamo.fechaPrimerPago)}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Día de corte</div>
+                                  <div className="fw-semibold">{detail.prestamo.diaCorte || "—"}</div>
+                                </div>
+                                <div className="col-6">
+                                  <div className="tiny text-muted">Día de pago</div>
+                                  <div className="fw-semibold">{detail.prestamo.diaPago || "—"}</div>
+                                </div>
+                                <div className="col-12">
+                                  <div className="tiny text-muted">Próxima cuota</div>
+                                  {detail.resumen?.proximaCuotaFecha ? (
+                                    <div className="fw-semibold">
+                                      {_prDate(detail.resumen.proximaCuotaFecha)} • {_prMoney(detail.resumen.proximaCuotaMonto || 0)}
+                                    </div>
+                                  ) : (
+                                    <div className="fw-semibold text-muted">—</div>
+                                  )}
+                                </div>
+                                <div className="col-12">
+                                  <div className="tiny text-muted">Vencidas</div>
+                                  <div className="fw-semibold">
+                                    {detail.resumen?.cuotasVencidas || 0} • {_prMoney(detail.resumen?.montoVencido || 0)}
+                                  </div>
+                                </div>
+                                <div className="col-12 mt-1">
+                                  <div className="tiny text-muted">Estado</div>
+                                  <div>{_prEstadoBadge(detail.prestamo.estadoSistema || detail.prestamo.estado)}</div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {detail.resumen ? (
+                          <div className="row g-3 mt-1">
+                            <div className="col-12 col-lg-7">
+                              <div className="wbs-card p-3">
+                                <div className="fw-bold mb-2">Al día</div>
+                                <div className="row g-2">
+                                  <div className="col-6">
+                                    <div className="tiny text-muted">Saldo insoluto</div>
+                                    <div className="fw-semibold">{_prMoney(detail.resumen.saldoInsoluto || 0)}</div>
+                                  </div>
+                                  <div className="col-6">
+                                    <div className="tiny text-muted">Pendiente total</div>
+                                    <div className="fw-semibold">{_prMoney(detail.resumen.totalPendiente || 0)}</div>
+                                  </div>
+                                  <div className="col-6">
+                                    <div className="tiny text-muted">Vencidas</div>
+                                    <div className="fw-semibold">{detail.resumen.cuotasVencidas || 0}</div>
+                                    <div className="tiny text-muted">{_prMoney(detail.resumen.montoVencido || 0)}</div>
+                                  </div>
+                                  <div className="col-6">
+                                    <div className="tiny text-muted">Próxima cuota</div>
+                                    <div className="fw-semibold">{detail.resumen.proximaCuotaFecha ? _prDate(detail.resumen.proximaCuotaFecha) : "—"}</div>
+                                    <div className="tiny text-muted">{detail.resumen.proximaCuotaFecha ? _prMoney(detail.resumen.proximaCuotaMonto || 0) : ""}</div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="col-12 col-lg-5">
+                              <div className="wbs-card p-3">
+                                <div className="fw-bold mb-2">Próximas cuotas</div>
+                                {(detail.resumen.proximasCuotas || []).length ? (
+                                  <div className="table-responsive">
+                                    <table className="table table-sm wbs-table align-middle mb-0">
+                                      <thead>
+                                        <tr>
+                                          <th>#</th>
+                                          <th>Fecha</th>
+                                          <th className="text-end">Pendiente</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {detail.resumen.proximasCuotas.map(pc => (
+                                          <tr key={`${pc.nroCuota}-${pc.fechaPago}`}>
+                                            <td>{pc.nroCuota}</td>
+                                            <td>{_prDate(pc.fechaPago)}</td>
+                                            <td className="text-end">{_prMoney(pc.pendiente || 0)}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ) : (
+                                  <div className="text-muted">No hay cuotas pendientes futuras.</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="tab-pane fade" id="prAmort" role="tabpanel">
+                        <div className="table-responsive">
+                          <table className="table table-sm wbs-table align-middle mb-0">
+                            <thead>
+                              <tr>
+                                <th style={{width: 70}}>#</th>
+                                <th style={{width: 140}}>Fecha</th>
+                                <th style={{width: 140}}>Cuota</th>
+                                <th style={{width: 140}}>Interés</th>
+                                <th style={{width: 140}}>Capital</th>
+                                <th style={{width: 140}}>Mora (pend.)</th>
+                                <th style={{width: 140}}>Pendiente</th>
+                                <th style={{width: 160}}>Saldo</th>
+                                <th style={{width: 120}}>Estado</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(detail.cuotas || []).map(c => (
+                                <tr key={c.idCuota || c.nroCuota}>
+                                  <td>{c.nroCuota}</td>
+                                  <td>{_prDate(c.fechaPago)}</td>
+                                  <td>{_prMoney(c.cuota)}</td>
+                                  <td>{_prMoney(c.interesCorriente)}</td>
+                                  <td>{_prMoney(c.capital)}</td>
+                                  <td>{_prMoney(c.moraPendiente || 0)}</td>
+                                  <td>{_prMoney(c.totalPendiente || 0)}</td>
+                                  <td>{_prMoney(c.saldoDespues)}</td>
+                                  <td>{_prEstadoBadge(c.estadoAlDia || c.estado)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div className="tab-pane fade" id="prPagos" role="tabpanel">
+                        <div className="row g-3">
+                          <div className="col-12 col-lg-5">
+                            <div className="wbs-card p-3">
+                              <div className="fw-bold mb-2 d-flex align-items-center justify-content-between">
+                                <span>Registrar pago</span>
+                                {detail?.resumen ? (
+                                  <span className="badge text-bg-dark rounded-pill">
+                                    Pendiente: {_prMoney(detail.resumen.totalPendiente || 0)}
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              {pagoMsg ? (
+                                <div className="alert alert-success py-2" role="alert">
+                                  <i className="bi bi-check2-circle me-2"></i>{pagoMsg}
+                                </div>
+                              ) : null}
+                              {pagoErr ? (
+                                <div className="alert alert-danger py-2" role="alert">
+                                  <i className="bi bi-exclamation-triangle me-2"></i>{pagoErr}
+                                </div>
+                              ) : null}
+
+                              <div className="row g-2">
+                                <div className="col-12">
+                                  <label className="form-label tiny text-muted mb-1">Fecha/hora</label>
+                                  <input
+                                    type="datetime-local"
+                                    className="form-control"
+                                    value={pagoForm.fechaHora}
+                                    onChange={(e)=>setPagoForm(f=>({...f, fechaHora:e.target.value}))}
+                                  />
+                                </div>
+                                <div className="col-12 col-sm-6">
+                                  <label className="form-label tiny text-muted mb-1">Monto</label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    className="form-control"
+                                    value={pagoForm.monto}
+                                    onChange={(e)=>setPagoForm(f=>({...f, monto:e.target.value}))}
+                                    placeholder="0.00"
+                                  />
+                                </div>
+                                <div className="col-12 col-sm-6">
+                                  <label className="form-label tiny text-muted mb-1">Método</label>
+                                  <select
+                                    className="form-select"
+                                    value={pagoForm.metodo}
+                                    onChange={(e)=>setPagoForm(f=>({...f, metodo:e.target.value}))}
+                                  >
+                                    <option>Efectivo</option>
+                                    <option>Transferencia</option>
+                                    <option>Depósito</option>
+                                    <option>Tarjeta</option>
+                                    <option>Otro</option>
+                                  </select>
+                                </div>
+                                <div className="col-12">
+                                  <label className="form-label tiny text-muted mb-1">Referencia</label>
+                                  <input
+                                    className="form-control"
+                                    value={pagoForm.referencia}
+                                    onChange={(e)=>setPagoForm(f=>({...f, referencia:e.target.value}))}
+                                    placeholder="Ej. #Transacción, banco, etc."
+                                  />
+                                </div>
+                                <div className="col-12">
+                                  <label className="form-label tiny text-muted mb-1">Nota</label>
+                                  <textarea
+                                    className="form-control"
+                                    rows="2"
+                                    value={pagoForm.nota}
+                                    onChange={(e)=>setPagoForm(f=>({...f, nota:e.target.value}))}
+                                    placeholder="Opcional"
+                                  />
+                                </div>
+                                <div className="col-12 d-grid">
+                                  <button className="btn btn-gold" disabled={pagoSaving} onClick={registrarPago}>
+                                    {pagoSaving ? <SpinnerInline label="Registrando..." /> : <><i className="bi bi-cash-coin me-2"></i>Registrar pago</>}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="col-12 col-lg-7">
+                            <div className="wbs-card p-3">
+                              <div className="fw-bold mb-2">Historial de pagos</div>
+                              {!detail?.pagos?.length ? (
+                                <div className="text-muted">Aún no hay pagos registrados.</div>
+                              ) : (
+                                <div className="table-responsive">
+                                  <table className="table table-sm wbs-table align-middle mb-0">
+                                    <thead>
+                                      <tr>
+                                        <th style={{width: 160}}>Fecha/hora</th>
+                                        <th style={{width: 120}}>Monto</th>
+                                        <th style={{width: 120}}>Método</th>
+                                        <th style={{width: 140}}>Mora</th>
+                                        <th style={{width: 140}}>Interés</th>
+                                        <th style={{width: 140}}>Capital</th>
+                                        <th>Referencia/Nota</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(detail.pagos || []).map(p => (
+                                        <tr key={p.idPago || p.fechaHora}>
+                                          <td className="tiny">{String(p.fechaHora || "").replace('T',' ').slice(0,19) || "—"}</td>
+                                          <td className="fw-semibold">{_prMoney(p.monto)}</td>
+                                          <td>{p.metodo || "—"}</td>
+                                          <td>{_prMoney(p.moratorioCobrado || 0)}</td>
+                                          <td>{_prMoney(p.interesCobrado || 0)}</td>
+                                          <td>{_prMoney(p.capitalCobrado || 0)}</td>
+                                          <td className="tiny">
+                                            {(p.referencia || p.nota) ? (
+                                              <>
+                                                {p.referencia ? <div><span className="text-muted">Ref:</span> {p.referencia}</div> : null}
+                                                {p.nota ? <div><span className="text-muted">Nota:</span> {p.nota}</div> : null}
+                                              </>
+                                            ) : "—"}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-outline-dark" data-bs-dismiss="modal">Cerrar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    );
+  }
+</script>

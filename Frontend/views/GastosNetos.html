@@ -1,0 +1,995 @@
+<script type="text/babel">
+  /**
+   * View: Gastos Netos
+   * - Cards + filtros + balance por persona
+   * - Modal con tabs (resumen/fijos/variables/movimientos)
+   * - Plan de liquidación (netting) desde backend
+   *
+   * Nota de arquitectura:
+   * Este proyecto usa Views como archivos .html con JSX (Babel in-browser),
+   * por consistencia el componente vive aquí.
+   */
+
+  const GN = {
+    currency: new Intl.NumberFormat("es-HN", { style: "currency", currency: "HNL" }),
+    money(v) {
+      const n = typeof v === "number" ? v : parseFloat(String(v || "").replace(/[^0-9.\-]/g, ""));
+      return this.currency.format(isNaN(n) ? 0 : n);
+    },
+    monthNow() {
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      return `${y}-${m}`;
+    },
+    monthLabel(yyyyMm) {
+      const s = String(yyyyMm || "").trim();
+      if (!/^\d{4}-\d{2}$/.test(s)) return s || "—";
+      try {
+        const [y, m] = s.split("-").map(Number);
+        const dt = new Date(y, m - 1, 1);
+        return dt.toLocaleDateString("es-HN", { year: "numeric", month: "long" });
+      } catch (e) {
+        return s;
+      }
+    },
+    lastNMonths(n = 24) {
+      const out = [];
+      const d = new Date();
+      d.setDate(1);
+      for (let i = 0; i < n; i++) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        out.push(`${y}-${m}`);
+        d.setMonth(d.getMonth() - 1);
+      }
+      return out;
+    },
+    toISODate(v) {
+      if (!v) return "";
+      if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+      const dt = (v instanceof Date) ? v : new Date(v);
+      if (dt.toString() === "Invalid Date") return "";
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, "0");
+      const d = String(dt.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    },
+    cmpISO(a, b) {
+      return String(a || "") > String(b || "");
+    }
+  };
+
+  function gnRangeInvalid({ modo, desde, hasta }) {
+    if (modo !== "rango") return false;
+    const d = String(desde || "").trim();
+    const h = String(hasta || "").trim();
+    if (!d || !h) return false;
+    return d > h;
+  }
+
+  function bsModalShow(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(el).show();
+      return;
+    }
+
+    try {
+      if (!el.dataset.wbsBindDismiss) {
+        el.dataset.wbsBindDismiss = '1';
+        el.addEventListener('click', (ev) => {
+          const btn = ev.target.closest('[data-bs-dismiss="modal"]');
+          if (btn) {
+            ev.preventDefault();
+            bsModalHide(id);
+          }
+        });
+      }
+
+      el.style.display = 'block';
+      el.classList.add('show');
+      el.removeAttribute('aria-hidden');
+      el.setAttribute('aria-modal', 'true');
+      document.body.classList.add('modal-open');
+
+      const bd = document.createElement('div');
+      bd.className = 'modal-backdrop fade show';
+      bd.dataset.modalFor = id;
+      document.body.appendChild(bd);
+      bd.addEventListener('click', () => bsModalHide(id));
+    } catch (e) {}
+  }
+
+  function bsModalHide(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (window.bootstrap?.Modal) {
+      const inst = window.bootstrap.Modal.getInstance(el) || window.bootstrap.Modal.getOrCreateInstance(el);
+      inst.hide();
+      return;
+    }
+
+    try {
+      el.classList.remove('show');
+      el.style.display = 'none';
+      el.setAttribute('aria-hidden', 'true');
+      el.removeAttribute('aria-modal');
+      document.querySelectorAll('.modal-backdrop').forEach(bd => {
+        if (bd?.dataset?.modalFor === id) bd.remove();
+      });
+      const anyOpen = document.querySelector('.modal.show');
+      if (!anyOpen) document.body.classList.remove('modal-open');
+    } catch (e) {}
+  }
+
+  function GastosNetosView({ user }) {
+    const [loading, setLoading] = React.useState(false);
+    const [error, setError] = React.useState("");
+
+    const [personas, setPersonas] = React.useState([]);
+    const [balance, setBalance] = React.useState([]);
+
+    const [cards, setCards] = React.useState({
+      totalGastos: 0,
+      totalPagado: 0,
+      totalPendiente: 0,
+      aFavorCount: 0,
+      aFavorMonto: 0,
+      enContraCount: 0,
+      enContraMonto: 0,
+      lastUpdateIso: "",
+    });
+
+    const defaults = React.useMemo(() => ({
+      modo: "mes",
+      periodo: GN.monthNow(),
+      desde: "",
+      hasta: "",
+      tipo: "Todos",
+      personaId: "",
+      incluirPagados: true,
+    }), []);
+
+    const [filters, setFilters] = React.useState(defaults);
+
+    const periodOptions = React.useMemo(() => GN.lastNMonths(24), []);
+
+    const personaLabel = React.useMemo(() => {
+      if (!filters.personaId) return "Todas";
+      const p = (personas || []).find(x => x.id === filters.personaId);
+      return p ? p.nombre : "—";
+    }, [filters.personaId, personas]);
+
+    // Plan de liquidación (desde backend)
+    const [planOpen, setPlanOpen] = React.useState(false);
+    const [planLoading, setPlanLoading] = React.useState(false);
+    const [planError, setPlanError] = React.useState("");
+    const [plan, setPlan] = React.useState({ transfers: [], totalMonto: 0, note: "" });
+    const [planCopyMsg, setPlanCopyMsg] = React.useState("");
+
+    // Modal detalle
+    const [selRow, setSelRow] = React.useState(null);
+    const [detalleTab, setDetalleTab] = React.useState("resumen");
+    const [detalleLoading, setDetalleLoading] = React.useState(false);
+    const [detalleError, setDetalleError] = React.useState("");
+    const [detallePersona, setDetallePersona] = React.useState(null);
+
+    function buildPayload(f) {
+      const payload = {
+        modo: f.modo,
+        periodo: f.periodo,
+        desde: f.desde,
+        hasta: f.hasta,
+        tipo: f.tipo,
+        personaId: f.personaId,
+        incluirPagados: !!f.incluirPagados,
+      };
+      if (payload.modo === "mes") {
+        payload.desde = "";
+        payload.hasta = "";
+      } else {
+        payload.periodo = "";
+      }
+      return payload;
+    }
+
+    async function loadPersonas() {
+      try {
+        const res = await gasCall("listarPersonasNetosActivas");
+        const raw = Array.isArray(res) ? res : [];
+        const norm = raw
+          .map(p => ({
+            id: String(p?.id || p?.id_persona || p?.personaId || "").trim(),
+            nombre: String(p?.nombre || p?.nombre_persona || p?.nombrePersona || "").trim(),
+          }))
+          .filter(p => p.id && p.nombre)
+          .sort((a, b) => a.nombre.localeCompare(b.nombre));
+        setPersonas(norm);
+      } catch (e) {
+        setPersonas([]);
+      }
+    }
+
+    async function fetchResumen(payload) {
+      setLoading(true);
+      setError("");
+      try {
+        const res = await gasCall("getGastosNetosResumen", payload);
+        if (res && res.ok) {
+          const c = res.cards || {};
+          setCards({
+            totalGastos: Number(c.totalGastos || 0),
+            totalPagado: Number(c.totalPagado || 0),
+            totalPendiente: Number(c.totalPendiente || 0),
+            aFavorCount: Number(c.aFavorCount || 0),
+            aFavorMonto: Number(c.aFavorMonto || 0),
+            enContraCount: Number(c.enContraCount || 0),
+            enContraMonto: Number(c.enContraMonto || 0),
+            lastUpdateIso: String(c.lastUpdateIso || ""),
+          });
+
+          const b = Array.isArray(res.balancePorPersona) ? res.balancePorPersona : [];
+          setBalance(b);
+
+          // Validación: Total = Pagado + Pendiente
+          const t = Number(c.totalGastos || 0);
+          const p = Number(c.totalPagado || 0);
+          const pe = Number(c.totalPendiente || 0);
+          if (Math.abs(t - (p + pe)) > 0.02) {
+            setError("Aviso: los totales no cuadran exactamente (redondeo / datos). Revisa registros.");
+          }
+        } else {
+          setError((res && res.message) || "No se pudo calcular el resumen.");
+          setCards({ ...cards, lastUpdateIso: "" });
+          setBalance([]);
+        }
+      } catch (e) {
+        setError(String(e?.message || e));
+        setBalance([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function fetchPlan(payload) {
+      setPlanLoading(true);
+      setPlanError("");
+      try {
+        const res = await gasCall("getGastosNetosPlanLiquidacion", payload);
+        if (res && res.ok) {
+          setPlan({
+            transfers: Array.isArray(res.transfers) ? res.transfers : [],
+            totalMonto: Number(res.totalMonto || 0),
+            note: String(res.note || ""),
+          });
+        } else {
+          setPlan({ transfers: [], totalMonto: 0, note: "" });
+          setPlanError((res && res.message) || "No se pudo calcular el plan.");
+        }
+      } catch (e) {
+        setPlan({ transfers: [], totalMonto: 0, note: "" });
+        setPlanError(String(e?.message || e));
+      } finally {
+        setPlanLoading(false);
+      }
+    }
+
+    async function fetchDetallePersona(personaId) {
+      const pid = String(personaId || "").trim();
+      if (!pid) return;
+      setDetalleLoading(true);
+      setDetalleError("");
+      setDetallePersona(null);
+      try {
+        const payload = buildPayload({ ...filters, personaId: pid });
+        const res = await gasCall("getGastosNetosDetallePersona", payload);
+        if (res && res.ok) setDetallePersona(res);
+        else setDetalleError((res && res.message) || "No se pudo cargar el detalle.");
+      } catch (e) {
+        setDetalleError(String(e?.message || e));
+      } finally {
+        setDetalleLoading(false);
+      }
+    }
+
+    function applyFilters(nextFilters) {
+      const f = nextFilters || filters;
+      if (gnRangeInvalid(f)) {
+        setError("Rango inválido: 'Desde' no puede ser mayor que 'Hasta'.");
+        return;
+      }
+      const payload = buildPayload(f);
+      fetchResumen(payload);
+      fetchPlan(payload);
+    }
+
+    function clearFilters() {
+      const cleared = { ...defaults, tipo: "Todos", personaId: "", incluirPagados: true };
+      setFilters(cleared);
+      applyFilters(cleared);
+    }
+
+    React.useEffect(() => {
+      loadPersonas();
+      applyFilters(defaults);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    async function copyPlanToClipboard() {
+      const lines = (plan?.transfers || []).map(t => `${t.fromPersonaNombre} le paga ${GN.money(t.monto)} a ${t.toPersonaNombre}`);
+      const text = lines.join("\n");
+      if (!text) return;
+
+      const done = () => {
+        setPlanCopyMsg("Copiado");
+        window.setTimeout(() => setPlanCopyMsg(""), 1500);
+      };
+
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          done();
+          return;
+        }
+      } catch (e) {}
+
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.top = "-1000px";
+        ta.style.left = "-1000px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        done();
+      } catch (e) {
+        setPlanCopyMsg("No se pudo copiar");
+        window.setTimeout(() => setPlanCopyMsg(""), 2000);
+      }
+    }
+
+    const det = detallePersona;
+    const detRes = (det && det.resumen) ? det.resumen : {};
+    const pp = detRes.pagadoVsPendiente || {};
+    const fv = detRes.fijoVsVar || {};
+
+    return (
+      <div className="wbs-page">
+        <div className="d-flex flex-wrap align-items-end justify-content-between gap-2">
+          <div>
+            <h2 className="wbs-page-title mb-0">Gastos Netos</h2>
+            <div className="wbs-meta mt-1">
+              Balance + conciliación • {filters.modo === "mes" ? GN.monthLabel(filters.periodo) : "Rango personalizado"}
+              {filters.tipo && filters.tipo !== "Todos" ? ` • ${filters.tipo}` : ""}
+              {filters.personaId ? ` • ${personaLabel}` : ""}
+              {!filters.incluirPagados ? " • Solo pendientes" : ""}
+            </div>
+          </div>
+
+          <div className="d-flex gap-2 flex-wrap">
+            <span className="wbs-chip"><span className="wbs-chip-dot"></span>Netting</span>
+          </div>
+        </div>
+
+        {/* Cards */}
+        <div className="row g-3 mt-1">
+          <div className="col-12 col-sm-6 col-lg-4">
+            <div className="wbs-stat soft-yellow">
+              <div className="label">Total Gastos</div>
+              <div className="value">{loading ? "—" : GN.money(cards.totalGastos)}</div>
+              <div className="sub">Fijos + Variables</div>
+            </div>
+          </div>
+
+          <div className="col-12 col-sm-6 col-lg-4">
+            <div className="wbs-stat soft-green">
+              <div className="label">Total Pagado</div>
+              <div className="value">{loading ? "—" : GN.money(cards.totalPagado)}</div>
+              <div className="sub">Aportes + abonos</div>
+            </div>
+          </div>
+
+          <div className="col-12 col-sm-6 col-lg-4">
+            <div className="wbs-stat soft-blue">
+              <div className="label">Total Pendiente</div>
+              <div className="value">{loading ? "—" : GN.money(cards.totalPendiente)}</div>
+              <div className="sub">Por pagar / aportar</div>
+            </div>
+          </div>
+
+          <div className="col-12 col-sm-6 col-lg-6">
+            <div className="wbs-stat soft-purple">
+              <div className="label">Personas con saldo a favor</div>
+              <div className="value">{loading ? "—" : GN.money(cards.aFavorMonto)}</div>
+              <div className="sub">{loading ? "—" : `${cards.aFavorCount} persona(s)`}</div>
+            </div>
+          </div>
+
+          <div className="col-12 col-sm-6 col-lg-6">
+            <div className="wbs-stat">
+              <div className="label">Personas con saldo en contra</div>
+              <div className="value">{loading ? "—" : GN.money(cards.enContraMonto)}</div>
+              <div className="sub">{loading ? "—" : `${cards.enContraCount} persona(s)`}</div>
+            </div>
+          </div>
+        </div>
+
+
+
+        {/* Validación: Total = Pagado + Pendiente */}
+        {(() => {
+          const total = Number(cards.totalGastos || 0);
+          const sum = Number(cards.totalPagado || 0) + Number(cards.totalPendiente || 0);
+          const delta = Math.abs(total - sum);
+          if (!total && !sum) return null;
+          if (delta <= 0.02) return null; // tolerancia 2 centavos
+          return (
+            <div className="alert alert-warning mt-3 mb-0">
+              <i className="bi bi-exclamation-circle me-2"></i>
+              Los totales no cuadran: Total ({GN.money(total)}) ≠ Pagado + Pendiente ({GN.money(sum)}). Revisa registros/abonos.
+            </div>
+          );
+        })()}
+
+        {/* Filters */}
+        <div className="wbs-card p-3 mt-3">
+          <div className="row g-2 align-items-end">
+            <div className="col-12 col-md-3">
+              <label className="form-label small mb-1">Periodo</label>
+              <div className="btn-group w-100" role="group" aria-label="Modo de periodo">
+                <button
+                  type="button"
+                  className={`btn ${filters.modo === "mes" ? "btn-dark" : "btn-outline-dark"}`}
+                  onClick={() => setFilters(f => ({ ...f, modo: "mes" }))}
+                >
+                  Mes/Año
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${filters.modo === "rango" ? "btn-dark" : "btn-outline-dark"}`}
+                  onClick={() => setFilters(f => ({ ...f, modo: "rango" }))}
+                >
+                  Rango
+                </button>
+              </div>
+            </div>
+
+            {filters.modo === "mes" ? (
+              <div className="col-12 col-md-3">
+                <label className="form-label small mb-1">Mes</label>
+                <select
+                  className="form-select"
+                  value={filters.periodo}
+                  onChange={(e) => setFilters(f => ({ ...f, periodo: e.target.value }))}
+                >
+                  {periodOptions.map(p => (
+                    <option key={p} value={p}>{GN.monthLabel(p)}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <>
+                <div className="col-6 col-md-2">
+                  <label className="form-label small mb-1">Desde</label>
+                  <input
+                    type="date"
+                    className="form-control"
+                    value={filters.desde}
+                    onChange={(e) => setFilters(f => ({ ...f, desde: e.target.value }))}
+                  />
+                </div>
+                <div className="col-6 col-md-2">
+                  <label className="form-label small mb-1">Hasta</label>
+                  <input
+                    type="date"
+                    className="form-control"
+                    value={filters.hasta}
+                    onChange={(e) => setFilters(f => ({ ...f, hasta: e.target.value }))}
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="col-6 col-md-2">
+              <label className="form-label small mb-1">Tipo</label>
+              <select
+                className="form-select"
+                value={filters.tipo}
+                onChange={(e) => setFilters(f => ({ ...f, tipo: e.target.value }))}
+              >
+                <option value="Todos">Todos</option>
+                <option value="Fijos">Fijos</option>
+                <option value="Variables">Variables</option>
+              </select>
+            </div>
+
+            <div className="col-6 col-md-2">
+              <label className="form-label small mb-1">Persona</label>
+              <select
+                className="form-select"
+                value={filters.personaId}
+                onChange={(e) => setFilters(f => ({ ...f, personaId: e.target.value }))}
+              >
+                <option value="">Todas</option>
+                {(personas || []).map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="col-12 col-md-2">
+              <label className="form-label small mb-1">Incluir pagados</label>
+              <div className="form-check form-switch">
+                <input
+                  className="form-check-input"
+                  type="checkbox"
+                  role="switch"
+                  id="gnTogglePagados"
+                  checked={!!filters.incluirPagados}
+                  onChange={(e) => setFilters(f => ({ ...f, incluirPagados: e.target.checked }))}
+                />
+                <label className="form-check-label small" htmlFor="gnTogglePagados">
+                  {filters.incluirPagados ? "Incluye pagados" : "Solo pendientes"}
+                </label>
+              </div>
+            </div>
+
+            <div className="col-12 d-flex gap-2 justify-content-end mt-2">
+              <button className="btn btn-outline-secondary" onClick={clearFilters} disabled={loading}>
+                <i className="bi bi-x-circle me-2"></i>
+                Limpiar
+              </button>
+              <button className="btn btn-outline-secondary" onClick={() => applyFilters()} disabled={loading}>
+                {loading ? <SpinnerInline label="" /> : <i className="bi bi-funnel me-2"></i>}
+                Filtrar
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="alert alert-danger mt-3 mb-0">
+            <i className="bi bi-exclamation-triangle me-2"></i>
+            {error}
+          </div>
+        ) : null}
+
+        {/* Balance */}
+        <div className="wbs-card p-3 mt-3">
+          <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div>
+              <h5 className="mb-0">Balance por persona</h5>
+              <div className="text-muted small mt-1">
+                {loading ? "Calculando…" : `${(balance || []).length} persona(s)`}
+              </div>
+            </div>
+            <span className="badge text-bg-light border">
+              <i className="bi bi-table me-1"></i>
+              Fase 2
+            </span>
+          </div>
+
+          <div className="table-responsive mt-3" style={{ WebkitOverflowScrolling: "touch" }}>
+            <table className="table table-hover align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Persona</th>
+                  <th className="text-end">Fijos asignados</th>
+                  <th className="text-end">Fijos pagados</th>
+                  <th className="text-end">Fijos pendientes</th>
+                  <th className="text-end">Variables deudor</th>
+                  <th className="text-end">Variables acreedor</th>
+                  <th className="text-end">Pagos recibidos</th>
+                  <th className="text-end">Pagos hechos</th>
+                  <th className="text-end">Saldo neto</th>
+                  <th className="text-end">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan="10" className="text-muted py-4">
+                      <SpinnerInline label="Cargando balance" />
+                    </td>
+                  </tr>
+                ) : (balance && balance.length ? (
+                  balance.map(r => {
+                    const saldo = Number(r?.saldoNeto || 0);
+                    const badge = saldo > 0.000001 ? "text-bg-success" : (saldo < -0.000001 ? "text-bg-danger" : "text-bg-secondary");
+                    const pid = String(r.personaId || "");
+                    const isSynthetic = pid.startsWith("name:");
+                    return (
+                      <tr key={pid}>
+                        <td>
+                          <div className="fw-semibold">{String(r.personaNombre || "—")}</div>
+                          <div className="text-muted small">ID: {pid || "—"}{isSynthetic ? " • (sin id en Sheets)" : ""}</div>
+                        </td>
+                        <td className="text-end">{GN.money(r.fijosAsignados)}</td>
+                        <td className="text-end">{GN.money(r.fijosPagados)}</td>
+                        <td className="text-end">{GN.money(r.fijosPendiente)}</td>
+                        <td className="text-end">{GN.money(r.variablesDeudor)}</td>
+                        <td className="text-end">{GN.money(r.variablesAcreedor)}</td>
+                        <td className="text-end">{GN.money(r.pagosRecibidos)}</td>
+                        <td className="text-end">{GN.money(r.pagosHechos)}</td>
+                        <td className="text-end"><span className={`badge ${badge}`}>{GN.money(saldo)}</span></td>
+                        <td className="text-end">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-dark"
+                            onClick={() => {
+                              setSelRow(r);
+                              setDetalleTab("resumen");
+                              setDetalleError("");
+                              setDetallePersona(null);
+                              bsModalShow('gnDetallePersonaModal');
+                              fetchDetallePersona(r.personaId);
+                            }}
+                          >
+                            <i className="bi bi-eye me-1"></i>
+                            Ver detalle
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan="10" className="text-muted py-4">
+                      No hay datos para los filtros seleccionados.
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Plan de liquidación */}
+        <div className="wbs-card p-3 mt-3">
+          <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div>
+              <h5 className="mb-0">Plan de liquidación</h5>
+              <div className="text-muted small mt-1">
+                Sugerencias para minimizar transferencias (netting) según variables pendientes.
+              </div>
+            </div>
+
+            <div className="d-flex flex-wrap align-items-center gap-2">
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-dark"
+                onClick={() => setPlanOpen(o => !o)}
+              >
+                <i className={`bi ${planOpen ? "bi-chevron-up" : "bi-chevron-down"} me-1`}></i>
+                {planOpen ? "Ocultar" : "Ver"}
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-secondary"
+                onClick={copyPlanToClipboard}
+                disabled={!plan?.transfers?.length}
+                title={!plan?.transfers?.length ? "No hay sugerencias para copiar" : "Copiar al portapapeles"}
+              >
+                <i className="bi bi-clipboard me-1"></i>
+                Copiar
+              </button>
+
+              {planCopyMsg ? (
+                <span className={`badge ${planCopyMsg === "Copiado" ? "text-bg-success" : "text-bg-danger"}`}>
+                  {planCopyMsg}
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          {planError ? (
+            <div className="alert alert-danger mt-3 mb-0">
+              <i className="bi bi-exclamation-triangle me-2"></i>
+              {planError}
+            </div>
+          ) : null}
+
+          {planOpen ? (
+            <>
+              <div className="d-flex flex-wrap gap-2 mt-3">
+                <span className="badge text-bg-light border">Transferencias: <b>{planLoading ? "—" : (plan?.transfers?.length || 0)}</b></span>
+                <span className="badge text-bg-light border">Total a mover: <b>{planLoading ? "—" : GN.money(plan?.totalMonto || 0)}</b></span>
+              </div>
+
+              {planLoading ? (
+                <div className="text-muted mt-3"><SpinnerInline label="Calculando plan" /></div>
+              ) : (plan?.transfers?.length ? (
+                <div className="table-responsive mt-3" style={{ WebkitOverflowScrolling: "touch" }}>
+                  <table className="table table-sm table-hover align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Paga</th>
+                        <th>Recibe</th>
+                        <th className="text-end">Monto</th>
+                        <th className="text-end">Sugerencia</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {plan.transfers.map((t, idx) => (
+                        <tr key={`${t.fromPersonaId}-${t.toPersonaId}-${idx}`}>
+                          <td className="text-muted">{idx + 1}</td>
+                          <td className="fw-semibold">{t.fromPersonaNombre}</td>
+                          <td className="fw-semibold">{t.toPersonaNombre}</td>
+                          <td className="text-end">{GN.money(t.monto)}</td>
+                          <td className="text-end">
+                            <span className="badge text-bg-light border">
+                              {t.fromPersonaNombre} → {t.toPersonaNombre}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-muted mt-3">
+                  No se requieren transferencias: los saldos netos están en 0 para los filtros actuales.
+                </div>
+              ))}
+
+              <div className="text-muted small mt-2">
+                {plan?.note ? `* ${plan.note}` : "* Basado en Variables pendientes."}
+              </div>
+            </>
+          ) : (
+            <div className="text-muted small mt-2">
+              {planLoading
+                ? "Calculando…"
+                : (plan?.transfers?.length
+                  ? `Hay ${plan.transfers.length} sugerencia(s) de transferencia por un total de ${GN.money(plan.totalMonto)}.`
+                  : "No hay transferencias sugeridas para los filtros actuales.")}
+            </div>
+          )}
+        </div>
+
+        {/* Modal detalle */}
+        <div className="modal fade" id="gnDetallePersonaModal" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-dialog-centered modal-xl modal-dialog-scrollable">
+            <div className="modal-content">
+              <div className="modal-header">
+                <div>
+                  <h5 className="modal-title mb-0">Detalle • {selRow?.personaNombre ? String(selRow.personaNombre) : "—"}</h5>
+                  {selRow?.personaId ? <div className="text-muted small mt-1">ID: {String(selRow.personaId)}</div> : null}
+                </div>
+                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+
+              <div className="modal-body">
+                {!selRow ? (
+                  <div className="text-muted">Selecciona una persona para ver el detalle.</div>
+                ) : (
+                  <>
+                    <ul className="nav nav-tabs">
+                      <li className="nav-item">
+                        <button type="button" className={`nav-link ${detalleTab === "resumen" ? "active" : ""}`} onClick={() => setDetalleTab("resumen")}>Resumen</button>
+                      </li>
+                      <li className="nav-item">
+                        <button type="button" className={`nav-link ${detalleTab === "fijos" ? "active" : ""}`} onClick={() => setDetalleTab("fijos")}>Fijos</button>
+                      </li>
+                      <li className="nav-item">
+                        <button type="button" className={`nav-link ${detalleTab === "variables" ? "active" : ""}`} onClick={() => setDetalleTab("variables")}>Variables</button>
+                      </li>
+                      <li className="nav-item">
+                        <button type="button" className={`nav-link ${detalleTab === "movimientos" ? "active" : ""}`} onClick={() => setDetalleTab("movimientos")}>Movimientos</button>
+                      </li>
+                    </ul>
+
+                    {detalleLoading ? (
+                      <div className="py-4 text-muted"><SpinnerInline label="Cargando detalle" /></div>
+                    ) : detalleError ? (
+                      <div className="alert alert-danger mt-3 mb-0"><i className="bi bi-exclamation-triangle me-2"></i>{detalleError}</div>
+                    ) : !det ? (
+                      <div className="py-4 text-muted">Sin datos.</div>
+                    ) : (
+                      <div className="pt-3">
+                        {detalleTab === "resumen" ? (
+                          <>
+                            <div className="row g-3">
+                              <div className="col-12 col-lg-6">
+                                <div className="wbs-card p-3">
+                                  <div className="d-flex align-items-center justify-content-between">
+                                    <div className="fw-semibold">Pagado vs pendiente</div>
+                                    <div className="text-muted small">(obligaciones)</div>
+                                  </div>
+                                  <div className="progress mt-2" style={{ height: 12 }}>
+                                    <div className="progress-bar" role="progressbar" style={{ width: `${Math.round(Number(pp.pctPagado || 0))}%` }} aria-valuenow={Math.round(Number(pp.pctPagado || 0))} aria-valuemin="0" aria-valuemax="100"></div>
+                                  </div>
+                                  <div className="d-flex justify-content-between small mt-2">
+                                    <span>Pagado: <b>{GN.money(pp.pagado)}</b></span>
+                                    <span>Pendiente: <b>{GN.money(pp.pendiente)}</b></span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="col-12 col-lg-6">
+                                <div className="wbs-card p-3">
+                                  <div className="d-flex align-items-center justify-content-between">
+                                    <div className="fw-semibold">Fijo vs variable</div>
+                                    <div className="text-muted small">(asignado + deudas)</div>
+                                  </div>
+                                  <div className="progress mt-2" style={{ height: 12 }}>
+                                    <div className="progress-bar" role="progressbar" style={{ width: `${Math.round(Number(fv.pctFijo || 0))}%` }} aria-valuenow={Math.round(Number(fv.pctFijo || 0))} aria-valuemin="0" aria-valuemax="100"></div>
+                                  </div>
+                                  <div className="d-flex justify-content-between small mt-2">
+                                    <span>Fijo: <b>{GN.money(fv.fijo)}</b></span>
+                                    <span>Variable: <b>{GN.money(fv.variable)}</b></span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="col-12">
+                                <div className="wbs-card p-3">
+                                  <div className="row g-2">
+                                    <div className="col-6 col-lg-3"><div className="text-muted small">Saldo neto (variables)</div><div className="fw-semibold">{GN.money(selRow?.saldoNeto || 0)}</div></div>
+                                    <div className="col-6 col-lg-3"><div className="text-muted small">Fijos asignados</div><div className="fw-semibold">{GN.money(detRes.fijosAsignados)}</div></div>
+                                    <div className="col-6 col-lg-3"><div className="text-muted small">Fijos pagados</div><div className="fw-semibold">{GN.money(detRes.fijosPagados)}</div></div>
+                                    <div className="col-6 col-lg-3"><div className="text-muted small">Fijos pendientes</div><div className="fw-semibold">{GN.money(detRes.fijosPendiente)}</div></div>
+                                    <div className="col-6 col-lg-3"><div className="text-muted small">Debe (variables)</div><div className="fw-semibold">{GN.money(detRes.varDebePendiente)}</div></div>
+                                    <div className="col-6 col-lg-3"><div className="text-muted small">Pagos hechos</div><div className="fw-semibold">{GN.money(detRes.varDebePagado)}</div></div>
+                                    <div className="col-6 col-lg-3"><div className="text-muted small">Por cobrar</div><div className="fw-semibold">{GN.money(detRes.varFavorPendiente)}</div></div>
+                                    <div className="col-6 col-lg-3"><div className="text-muted small">Pagos recibidos</div><div className="fw-semibold">{GN.money(detRes.varFavorRecibido)}</div></div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        ) : null}
+
+                        {detalleTab === "fijos" ? (
+                          (det.fijos && det.fijos.length) ? (
+                            <div className="table-responsive" style={{ WebkitOverflowScrolling: "touch" }}>
+                              <table className="table table-sm table-hover align-middle mb-0">
+                                <thead>
+                                  <tr>
+                                    <th>Vence</th>
+                                    <th>Servicio</th>
+                                    <th>Periodo</th>
+                                    <th>Proveedor</th>
+                                    <th className="text-end">Aporte</th>
+                                    <th className="text-end">Estado</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {det.fijos.map((g) => {
+                                    const ok = !!g.aportePagado;
+                                    return (
+                                      <tr key={String(g.gastoId)}>
+                                        <td className="text-muted">{String(g.vence || "—")}</td>
+                                        <td className="fw-semibold">{String(g.servicio || "—")}</td>
+                                        <td>{String(g.periodo || "—")}</td>
+                                        <td>{String(g.proveedor || "—")}</td>
+                                        <td className="text-end">{GN.money(g.aporteMonto)}</td>
+                                        <td className="text-end"><span className={`badge ${ok ? "text-bg-success" : "text-bg-warning"}`}>{String(g.estadoAporte || (ok ? "Pagado" : "Pendiente"))}</span></td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <div className="text-muted">No hay gastos fijos para este periodo.</div>
+                          )
+                        ) : null}
+
+                        {detalleTab === "variables" ? (
+                          (det.variables && det.variables.length) ? (
+                            <div className="table-responsive" style={{ WebkitOverflowScrolling: "touch" }}>
+                              <table className="table table-sm table-hover align-middle mb-0">
+                                <thead>
+                                  <tr>
+                                    <th>Fecha</th>
+                                    <th>Tipo</th>
+                                    <th>Rol</th>
+                                    <th>Contraparte</th>
+                                    <th>Descripción</th>
+                                    <th className="text-end">Monto</th>
+                                    <th className="text-end">Abonado</th>
+                                    <th className="text-end">Pendiente</th>
+                                    <th className="text-end">Estado</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {det.variables.map((v) => {
+                                    const st = String(v.estado || "").toLowerCase();
+                                    const badge = st === "pagado" ? "text-bg-success" : (st === "parcial" ? "text-bg-warning" : "text-bg-secondary");
+                                    const pagos = Array.isArray(v.pagos) ? v.pagos : [];
+                                    return (
+                                      <tr key={String(v.gastoId)}>
+                                        <td className="text-muted">{String(v.fecha || "—")}</td>
+                                        <td className="fw-semibold">{String(v.tipo || "—")}</td>
+                                        <td>{String(v.rol || "—")}</td>
+                                        <td>{String(v.contraparte || "—")}</td>
+                                        <td style={{ minWidth: 220 }}>
+                                          <div>{String(v.descripcion || "—")}</div>
+                                          {pagos.length ? (
+                                            <details className="mt-1">
+                                              <summary className="small text-muted">Abonos: {pagos.length} • {GN.money(v.abonado)}</summary>
+                                              <div className="small mt-2">
+                                                {pagos.map(p => (
+                                                  <div key={String(p.id || p.fechaPago)} className="d-flex justify-content-between gap-2">
+                                                    <span className="text-muted">{String(p.fechaPago || "—")}{p.nota ? ` • ${p.nota}` : ""}</span>
+                                                    <span className="fw-semibold">{GN.money(p.monto)}</span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </details>
+                                          ) : (
+                                            <div className="small text-muted">Sin abonos</div>
+                                          )}
+                                        </td>
+                                        <td className="text-end">{GN.money(v.monto)}</td>
+                                        <td className="text-end">{GN.money(v.abonado)}</td>
+                                        <td className="text-end">{GN.money(v.pendiente)}</td>
+                                        <td className="text-end"><span className={`badge ${badge}`}>{String(v.estado || "—")}</span></td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <div className="text-muted">No hay gastos variables para este periodo.</div>
+                          )
+                        ) : null}
+
+                        {detalleTab === "movimientos" ? (
+                          (det.movimientos && det.movimientos.length) ? (
+                            <div className="list-group">
+                              {det.movimientos.map((m, idx) => {
+                                const tipo = String(m.tipo || "");
+                                const badge = (tipo === "Pago" || tipo === "Cobro") ? "text-bg-success" : (tipo === "Fijo" ? "text-bg-primary" : "text-bg-secondary");
+                                return (
+                                  <div key={`${String(m.fecha)}-${idx}`} className="list-group-item">
+                                    <div className="d-flex justify-content-between align-items-start gap-2">
+                                      <div>
+                                        <div className="small text-muted">{String(m.fecha || "—")}</div>
+                                        <div className="fw-semibold">{String(m.titulo || "—")}</div>
+                                        {m.descripcion ? <div className="small text-muted mt-1">{String(m.descripcion)}</div> : null}
+                                      </div>
+                                      <div className="text-end">
+                                        <span className={`badge ${badge} mb-2`}>{tipo || "Movimiento"}</span>
+                                        <div className="fw-semibold">{GN.money(m.monto)}</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-muted">No hay movimientos en este periodo.</div>
+                          )
+                        ) : null}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="modal-footer">
+                <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="wbs-footer">
+          {cards.lastUpdateIso ? `Actualizado: ${cards.lastUpdateIso}` : ""}
+        </div>
+      </div>
+    );
+  }
+</script>

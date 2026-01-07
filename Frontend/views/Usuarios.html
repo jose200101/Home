@@ -1,0 +1,404 @@
+<script type="text/babel">
+  /**
+   * View: Usuarios (CRUD)
+   * Hoja: USUARIOS
+   */
+
+  function bsModalShow(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    // Preferimos Bootstrap JS si está disponible
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(el).show();
+      return;
+    }
+
+    // Fallback (sin bootstrap.js): mostrar modal manualmente
+    try {
+      // Bind de botones con data-bs-dismiss="modal"
+      if (!el.dataset.wbsBindDismiss) {
+        el.dataset.wbsBindDismiss = '1';
+        el.addEventListener('click', (ev) => {
+          const btn = ev.target.closest('[data-bs-dismiss="modal"]');
+          if (btn) {
+            ev.preventDefault();
+            bsModalHide(id);
+          }
+        });
+      }
+
+      el.style.display = 'block';
+      el.classList.add('show');
+      el.removeAttribute('aria-hidden');
+      el.setAttribute('aria-modal', 'true');
+      document.body.classList.add('modal-open');
+
+      // Backdrop
+      const bd = document.createElement('div');
+      bd.className = 'modal-backdrop fade show';
+      bd.dataset.modalFor = id;
+      document.body.appendChild(bd);
+
+      // Tap en backdrop cierra
+      bd.addEventListener('click', () => bsModalHide(id));
+
+      // Enfocar primer input para facilitar en móvil
+      setTimeout(() => {
+        const focusable = el.querySelector('input, select, textarea, button');
+        if (focusable && focusable.focus) focusable.focus();
+      }, 50);
+    } catch (e) {
+      // no-op
+    }
+  }
+
+  function bsModalHide(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (window.bootstrap?.Modal) {
+      const inst = window.bootstrap.Modal.getInstance(el) || window.bootstrap.Modal.getOrCreateInstance(el);
+      inst.hide();
+      return;
+    }
+
+    try {
+      el.classList.remove('show');
+      el.style.display = 'none';
+      el.setAttribute('aria-hidden', 'true');
+      el.removeAttribute('aria-modal');
+
+      document.querySelectorAll('.modal-backdrop').forEach(bd => {
+        if (bd?.dataset?.modalFor === id) bd.remove();
+      });
+
+      // Quitar modal-open solo si no quedan modales abiertos
+      const anyOpen = document.querySelector('.modal.show');
+      if (!anyOpen) document.body.classList.remove('modal-open');
+    } catch (e) {
+      // no-op
+    }
+  }
+
+  function shortId(id) {
+    const s = String(id || "");
+    return s.length > 8 ? s.slice(0, 8) + "…" : (s || "—");
+  }
+
+  function UsuariosView({ user }) {
+    const [loading, setLoading] = React.useState(false);
+    const [saving, setSaving] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const [items, setItems] = React.useState([]);
+    const [personas, setPersonas] = React.useState([]);
+
+    const [filters, setFilters] = React.useState({ q: "", estado: "" });
+
+    const emptyForm = React.useMemo(() => ({
+      id: "",
+      nombre_persona: "",
+      nombre_usuario: "",
+      contrasenia: "",
+      rol: "",
+      estado: "Activo"
+    }), []);
+
+    const [formMode, setFormMode] = React.useState("create");
+    const [form, setForm] = React.useState(emptyForm);
+
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const [uRes, pRes] = await Promise.all([
+          gasCall("listarUsuarios", { ...filters }),
+          gasCall("listarPersonasActivas")
+        ]);
+        setItems(Array.isArray(uRes) ? uRes : []);
+        setPersonas(Array.isArray(pRes) ? pRes : []);
+      } catch (e) {
+        setItems([]);
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    React.useEffect(() => { load(); }, []); // eslint-disable-line
+
+    function openCreate() {
+      setFormMode("create");
+      setForm({ ...emptyForm });
+      bsModalShow("modalUsuario");
+    }
+
+    function openEdit(u) {
+      setFormMode("edit");
+      setForm({
+        id: String(u?.id || ""),
+        nombre_persona: String(u?.nombre_persona || ""),
+        nombre_usuario: String(u?.nombre_usuario || ""),
+        contrasenia: "", // no se muestra
+        rol: String(u?.rol || ""),
+        estado: String(u?.estado || "Activo")
+      });
+      bsModalShow("modalUsuario");
+    }
+
+    async function onSave(e) {
+      e.preventDefault();
+      setSaving(true);
+      setError("");
+      try {
+        const r = await gasCall("guardarUsuario", { ...form });
+        if (!r || !r.ok) throw new Error(r?.message || "No se pudo guardar.");
+        bsModalHide("modalUsuario");
+        setForm(emptyForm);
+        setFormMode("create");
+        await load();
+      } catch (e2) {
+        setError(String(e2?.message || e2));
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    async function onDelete(u) {
+      const id = u?.id;
+      if (!id) return;
+
+      const meId = String(user?.id || "");
+      if (meId && String(id) === meId) {
+        window.alert("No puedes eliminar el usuario con el que iniciaste sesión.");
+        return;
+      }
+
+      if (!window.confirm(`¿Eliminar el usuario "${u?.nombre_usuario || id}"?`)) return;
+      setLoading(true);
+      setError("");
+      try {
+        await gasCall("eliminarUsuario", String(id));
+        await load();
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    const filtered = React.useMemo(() => {
+      const q = filters.q.trim().toLowerCase();
+      const est = filters.estado.trim().toLowerCase();
+      return (items || []).filter(u => {
+        if (est && String(u.estado || "").toLowerCase() !== est) return false;
+        if (!q) return true;
+        const hay = `${u.id} ${u.nombre_persona} ${u.nombre_usuario} ${u.rol}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }, [items, filters]);
+
+    return (
+      <div className="wbs-page">
+        <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+          <div>
+            <h2 className="wbs-page-title mb-0">Usuarios</h2>
+            <div className="text-muted tiny">Accesos y roles (hoja USUARIOS)</div>
+          </div>
+          <button className="btn btn-dark" onClick={openCreate}>
+            <i className="bi bi-plus-lg me-2"></i>
+            Nuevo Usuario
+          </button>
+        </div>
+
+        <div className="card border-0 shadow-sm mb-3">
+          <div className="card-body">
+            <div className="row g-2">
+              <div className="col-12 col-md-8">
+                <div className="input-group">
+                  <span className="input-group-text"><i className="bi bi-search"></i></span>
+                  <input
+                    className="form-control"
+                    placeholder="Buscar por usuario, persona, rol..."
+                    value={filters.q}
+                    onChange={(e) => setFilters(prev => ({ ...prev, q: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="col-12 col-md-4">
+                <select
+                  className="form-select"
+                  value={filters.estado}
+                  onChange={(e) => setFilters(prev => ({ ...prev, estado: e.target.value }))}
+                >
+                  <option value="">Estado (todos)</option>
+                  <option value="Activo">Activo</option>
+                  <option value="Inactivo">Inactivo</option>
+                </select>
+              </div>
+              <div className="col-12 d-flex justify-content-end">
+                <button className="btn btn-outline-dark" onClick={load} disabled={loading}>
+                  {loading ? <SpinnerInline label="Actualizando" /> : (<><i className="bi bi-arrow-clockwise me-2"></i>Actualizar</>)}
+                </button>
+              </div>
+            </div>
+            {error && <div className="alert alert-danger mt-3 mb-0">{error}</div>}
+          </div>
+        </div>
+
+        <div className="card border-0 shadow-sm">
+          <div className="card-body">
+            <div className="text-muted tiny mb-2">{filtered.length} registro(s)</div>
+            <div className="table-responsive">
+              <table className="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th style={{ width: 120 }}>ID</th>
+                    <th>Persona</th>
+                    <th>Usuario</th>
+                    <th style={{ width: 150 }}>Rol</th>
+                    <th style={{ width: 110 }}>Estado</th>
+                    <th style={{ width: 120 }} className="text-end">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(u => (
+                    <tr key={String(u.id || Math.random())}>
+                      <td className="fw-bold" title={u.id || ""}>{shortId(u.id)}</td>
+                      <td>{u.nombre_persona || "—"}</td>
+                      <td>{u.nombre_usuario || "—"}</td>
+                      <td>{u.rol || "—"}</td>
+                      <td>
+                        <span className={`badge rounded-pill ${String(u.estado || "").toLowerCase() === "activo" ? "bg-success" : "bg-secondary"}`}>
+                          {u.estado || "—"}
+                        </span>
+                      </td>
+                      <td className="text-end">
+                        <div className="btn-group btn-group-sm" role="group">
+                          <button className="btn btn-outline-dark" onClick={() => openEdit(u)} title="Editar">
+                            <i className="bi bi-pencil"></i>
+                          </button>
+                          <button className="btn btn-outline-danger" onClick={() => onDelete(u)} title="Eliminar">
+                            <i className="bi bi-trash"></i>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan="6" className="text-center text-muted py-4">
+                        {loading ? "Cargando..." : "Sin registros"}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Modal Usuario */}
+        <div className="modal fade" id="modalUsuario" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content">
+              <form onSubmit={onSave}>
+                <div className="modal-header">
+                  <h5 className="modal-title">{formMode === "create" ? "Nuevo Usuario" : "Editar Usuario"}</h5>
+                  <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div className="modal-body">
+                  {error && <div className="alert alert-danger">{error}</div>}
+
+                  {formMode === "edit" && (
+                    <div className="mb-3">
+                      <label className="form-label">ID</label>
+                      <input className="form-control" value={form.id} disabled />
+                    </div>
+                  )}
+
+                  <div className="mb-3">
+                    <label className="form-label"><span className="req">*</span> Persona</label>
+                    <select
+                      className="form-select"
+                      value={form.nombre_persona}
+                      onChange={(e) => setForm(prev => ({ ...prev, nombre_persona: e.target.value }))}
+                      required
+                    >
+                      <option value="">Selecciona...</option>
+                      {personas.map(p => (
+                        <option key={String(p.id_persona || p.nombre_persona)} value={p.nombre_persona}>
+                          {p.nombre_persona}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="form-text">
+                      Solo se listan personas con estado <b>Activo</b>.
+                    </div>
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label"><span className="req">*</span> Usuario</label>
+                    <input
+                      className="form-control"
+                      value={form.nombre_usuario}
+                      onChange={(e) => setForm(prev => ({ ...prev, nombre_usuario: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label">
+                      {formMode === "create" ? (<><span className="req">*</span> Contraseña</>) : "Contraseña (dejar vacío para no cambiar)"}
+                    </label>
+                    <input
+                      type="password"
+                      className="form-control"
+                      value={form.contrasenia}
+                      onChange={(e) => setForm(prev => ({ ...prev, contrasenia: e.target.value }))}
+                      required={formMode === "create"}
+                    />
+                  </div>
+
+                  <div className="row g-2">
+                    <div className="col-12 col-md-6">
+                      <label className="form-label"><span className="req">*</span> Rol</label>
+                      <select
+                        className="form-select"
+                        value={form.rol}
+                        onChange={(e) => setForm(prev => ({ ...prev, rol: e.target.value }))}
+                        required
+                      >
+                        <option value="">Selecciona...</option>
+                        <option value="super_admin">super_admin</option>
+                        <option value="admin">admin</option>
+                        <option value="usuario">usuario</option>
+                      </select>
+                    </div>
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Estado</label>
+                      <select
+                        className="form-select"
+                        value={form.estado}
+                        onChange={(e) => setForm(prev => ({ ...prev, estado: e.target.value }))}
+                      >
+                        <option value="Activo">Activo</option>
+                        <option value="Inactivo">Inactivo</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-outline-dark" data-bs-dismiss="modal">Cancelar</button>
+                  <button type="submit" className="btn btn-dark" disabled={saving}>
+                    {saving ? <SpinnerInline label="Guardando" /> : "Guardar"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+</script>

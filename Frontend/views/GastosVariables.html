@@ -1,0 +1,1021 @@
+<script type="text/babel">
+  /**
+   * View: Gastos Variables (deudas)
+   * - CRUD de gastos variables
+   * - Detalle + registro de pagos (abonos)
+   * Referencia visual: GastosFijosView
+   */
+  const { useEffect, useMemo, useState } = React;
+
+  function bsModalShow(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    // Preferimos Bootstrap JS si está disponible
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(el).show();
+      return;
+    }
+
+    // Fallback (sin bootstrap.js): mostrar modal manualmente
+    try {
+      // Bind de botones con data-bs-dismiss="modal"
+      if (!el.dataset.wbsBindDismiss) {
+        el.dataset.wbsBindDismiss = '1';
+        el.addEventListener('click', (ev) => {
+          const btn = ev.target.closest('[data-bs-dismiss="modal"]');
+          if (btn) {
+            ev.preventDefault();
+            bsModalHide(id);
+          }
+        });
+      }
+
+      el.style.display = 'block';
+      el.classList.add('show');
+      el.removeAttribute('aria-hidden');
+      el.setAttribute('aria-modal', 'true');
+      document.body.classList.add('modal-open');
+
+      // Backdrop
+      const bd = document.createElement('div');
+      bd.className = 'modal-backdrop fade show';
+      bd.dataset.modalFor = id;
+      document.body.appendChild(bd);
+
+      // Tap en backdrop cierra
+      bd.addEventListener('click', () => bsModalHide(id));
+
+      // Enfocar primer input para facilitar en móvil
+      setTimeout(() => {
+        const focusable = el.querySelector('input, select, textarea, button');
+        if (focusable && focusable.focus) focusable.focus();
+      }, 50);
+    } catch (e) {
+      // no-op
+    }
+  }
+
+  function bsModalHide(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (window.bootstrap?.Modal) {
+      const inst = window.bootstrap.Modal.getInstance(el) || window.bootstrap.Modal.getOrCreateInstance(el);
+      inst.hide();
+      return;
+    }
+
+    try {
+      el.classList.remove('show');
+      el.style.display = 'none';
+      el.setAttribute('aria-hidden', 'true');
+      el.removeAttribute('aria-modal');
+
+      document.querySelectorAll('.modal-backdrop').forEach(bd => {
+        if (bd?.dataset?.modalFor === id) bd.remove();
+      });
+
+      // Quitar modal-open solo si no quedan modales abiertos
+      const anyOpen = document.querySelector('.modal.show');
+      if (!anyOpen) document.body.classList.remove('modal-open');
+    } catch (e) {
+      // no-op
+    }
+  }
+
+  function _gvMoney(n) {
+    const v = Number(n || 0);
+    try {
+      return v.toLocaleString("es-HN", { style: "currency", currency: "HNL" });
+    } catch (e) {
+      return `L. ${v.toFixed(2)}`;
+    }
+  }
+
+  function _gvDate(iso) {
+    if (!iso) return "—";
+    // iso esperado YYYY-MM-DD
+    try {
+      const [y, m, d] = String(iso).split("-").map(Number);
+      if (!y || !m || !d) return String(iso);
+      const dt = new Date(y, m - 1, d);
+      return dt.toLocaleDateString("es-HN", { year: "numeric", month: "short", day: "2-digit" });
+    } catch (e) {
+      return String(iso);
+    }
+  }
+
+  function _gvEstadoBadge(estado) {
+    const s = String(estado || "").toLowerCase();
+    let cls = "text-bg-secondary";
+    if (s === "pendiente") cls = "text-bg-warning";
+    if (s === "parcial") cls = "text-bg-info";
+    if (s === "pagado") cls = "text-bg-success";
+    return <span className={`badge rounded-pill ${cls}`}>{estado || "—"}</span>;
+  }
+
+  function _gvSafeIdLabel(id) {
+    if (!id) return "—";
+    return String(id).slice(0, 8);
+  }
+
+  function GastosVariablesView({ user }) {
+    // data
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const [items, setItems] = useState([]);
+    const [personas, setPersonas] = useState([]);
+
+    // filtros
+    const [fTipo, setFTipo] = useState("");
+    const [fDeudorId, setFDeudorId] = useState("");
+    const [fAcreedorId, setFAcreedorId] = useState("");
+    const [fEstado, setFEstado] = useState("");
+    const [fFrom, setFFrom] = useState("");
+    const [fTo, setFTo] = useState("");
+    const [q, setQ] = useState("");
+
+    // form gasto
+    const emptyForm = {
+      id: "",
+      tipo: "Amazon",
+      tipoOtro: "",
+      fecha: "",
+      deudorId: "",
+      acreedorId: "",
+      descripcion: "",
+      monto: "",
+    };
+    const [form, setForm] = useState({ ...emptyForm });
+
+    // detalle
+    const [selected, setSelected] = useState(null);
+
+    // pago form
+    const [pago, setPago] = useState({ fechaPago: "", monto: "", nota: "" });
+    const [paying, setPaying] = useState(false);
+
+    const personaById = useMemo(() => {
+      const map = {};
+      (personas || []).forEach(p => { map[String(p.id || "").trim()] = p; });
+      return map;
+    }, [personas]);
+
+    const tiposBase = useMemo(() => ([
+      "Amazon",
+      "Envíos",
+      "Supermercado",
+      "Deuda",
+      "Otro",
+    ]), []);
+
+    const tiposDetectados = useMemo(() => {
+      const s = new Set();
+      (items || []).forEach(it => {
+        const t = String(it.tipo || "").trim();
+        if (t) s.add(t);
+      });
+      // Respetar base, luego anexar otros
+      const base = tiposBase.filter(t => t !== "Otro");
+      const extras = [...s].filter(t => base.indexOf(t) === -1 && t !== "Otro").sort((a,b)=>a.localeCompare(b));
+      return [...base, ...extras, "Otro"];
+    }, [items, tiposBase]);
+
+    async function loadPersonas() {
+      try {
+        // listarPersonasActivas() retorna [{ id_persona, nombre_persona }]
+        // Normalizamos para que la vista use siempre { id, nombre }.
+        const res = await gasCall("listarPersonasActivas");
+        const raw = Array.isArray(res) ? res : [];
+        const norm = raw
+          .map(p => {
+            const id = String(p?.id || p?.id_persona || p?.persona_id || p?.personaId || "").trim();
+            const nombre = String(
+              p?.nombre || p?.nombre_persona || p?.nombreCompleto || p?.nombres || p?.persona || p?.nombrePersona || ""
+            ).trim();
+            return { id, nombre };
+          })
+          .filter(p => p.id && p.nombre);
+
+        setPersonas(norm);
+      } catch (e) {
+        // no bloquear
+        console.error(e);
+        setPersonas([]);
+      }
+    }
+
+    async function loadData(overrides) {
+      overrides = overrides || {};
+      setLoading(true);
+      setError("");
+      try {
+        const params = {
+          tipo: (overrides.tipo !== undefined ? overrides.tipo : fTipo) || "",
+          deudorId: (overrides.deudorId !== undefined ? overrides.deudorId : fDeudorId) || "",
+          acreedorId: (overrides.acreedorId !== undefined ? overrides.acreedorId : fAcreedorId) || "",
+          estado: (overrides.estado !== undefined ? overrides.estado : fEstado) || "",
+          fechaFrom: (overrides.fechaFrom !== undefined ? overrides.fechaFrom : fFrom) || "",
+          fechaTo: (overrides.fechaTo !== undefined ? overrides.fechaTo : fTo) || "",
+          q: (overrides.q !== undefined ? overrides.q : q) || "",
+        };
+        const res = await gasCall("listarGastosVariables", params);
+        setItems(Array.isArray(res) ? res : []);
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    useEffect(() => {
+      loadPersonas();
+      loadData();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Nota: Los filtros NO aplican automáticamente.
+    // El usuario define valores y luego presiona "Filtrar".
+
+    const computed = useMemo(() => {
+      const list = items || [];
+      const total = list.reduce((a, r) => a + Number(r.monto || 0), 0);
+      const abonado = list.reduce((a, r) => a + Number(r.abonado || 0), 0);
+      const pendiente = list.reduce((a, r) => a + Number(r.pendiente || 0), 0);
+      const pendientesCount = list.filter(r => String(r.estado || "").toLowerCase() !== "pagado").length;
+
+      return { total, abonado, pendiente, pendientesCount, list };
+    }, [items]);
+
+    function openNew() {
+      setError("");
+      setForm({ ...emptyForm, fecha: new Date().toISOString().slice(0, 10) });
+      bsModalShow("gvModalForm");
+    }
+
+    function openEdit(row) {
+      setError("");
+      const t = String(row.tipo || "").trim() || "Otro";
+      const baseIs = tiposBase.indexOf(t) >= 0 ? t : "Otro";
+      setForm({
+        id: row.id || "",
+        tipo: baseIs,
+        tipoOtro: baseIs === "Otro" ? t : "",
+        fecha: row.fecha || "",
+        deudorId: row.deudorId || "",
+        acreedorId: row.acreedorId || "",
+        descripcion: row.descripcion || "",
+        monto: row.monto ?? "",
+      });
+      bsModalShow("gvModalForm");
+    }
+
+    function openDetail(row) {
+      setSelected(row || null);
+      setPago({ fechaPago: new Date().toISOString().slice(0, 10), monto: "", nota: "" });
+      bsModalShow("gvModalDetail");
+    }
+
+    async function onSave(e) {
+      e.preventDefault();
+      setError("");
+
+      const tipoFinal = (form.tipo === "Otro" ? form.tipoOtro : form.tipo) || "";
+      const fecha = String(form.fecha || "").trim();
+      const deudorId = String(form.deudorId || "").trim();
+      const acreedorId = String(form.acreedorId || "").trim();
+      const monto = Number(form.monto || 0);
+
+      if (!tipoFinal.trim()) return setError("Selecciona el tipo de gasto (o escribe uno en 'Otro').");
+      if (!fecha) return setError("Selecciona la fecha.");
+      if (!deudorId) return setError("Selecciona el deudor (quien debe).");
+      if (!acreedorId) return setError("Selecciona el acreedor (a quien se le debe).");
+      if (deudorId === acreedorId) return setError("Deudor y acreedor no pueden ser la misma persona.");
+      if (!(monto > 0)) return setError("El monto debe ser mayor a 0.");
+
+      const deudor = personaById[deudorId];
+      const acreedor = personaById[acreedorId];
+
+      setSaving(true);
+      try {
+        const payload = {
+          id: form.id || "",
+          tipo: tipoFinal.trim(),
+          fecha,
+          deudorId,
+          deudorNombre: deudor ? (deudor.nombre || deudor.nombreCompleto || deudor.nombres || "") : "",
+          acreedorId,
+          acreedorNombre: acreedor ? (acreedor.nombre || acreedor.nombreCompleto || acreedor.nombres || "") : "",
+          descripcion: String(form.descripcion || "").trim(),
+          monto,
+          creadoPor: user?.username || user?.usuario || user?.nombre || "",
+        };
+        const res = await gasCall("guardarGastoVariable", payload);
+        if (!res?.ok) throw new Error(res?.message || "No se pudo guardar.");
+        bsModalHide("gvModalForm");
+        await loadData();
+      } catch (e2) {
+        setError(String(e2?.message || e2));
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    async function onDelete(row) {
+      const id = row?.id;
+      if (!id) return;
+      const ok = confirm(`¿Eliminar el gasto ${_gvSafeIdLabel(id)}? También se eliminarán los pagos asociados.`);
+      if (!ok) return;
+
+      setLoading(true);
+      setError("");
+      try {
+        const res = await gasCall("eliminarGastoVariable", id);
+        if (!res?.ok) throw new Error(res?.message || "No se pudo eliminar.");
+        // si estaba seleccionado
+        if (selected?.id === id) {
+          bsModalHide("gvModalDetail");
+          setSelected(null);
+        }
+        await loadData();
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function onRegistrarPago() {
+      if (!selected?.id) return;
+
+      setPaying(true);
+      setError("");
+      try {
+        const monto = Number(pago.monto || 0);
+        const fechaPago = String(pago.fechaPago || "").trim();
+        if (!fechaPago) throw new Error("Selecciona la fecha de pago.");
+        if (!(monto > 0)) throw new Error("El monto del pago debe ser mayor a 0.");
+
+        const payload = {
+          gastoId: selected.id,
+          monto,
+          fechaPago,
+          nota: String(pago.nota || "").trim(),
+          registradoPor: user?.username || user?.usuario || user?.nombre || "",
+        };
+
+        const res = await gasCall("registrarPagoGastoVariable", payload);
+        if (!res?.ok) throw new Error(res?.message || "No se pudo registrar el pago.");
+
+        // recargar y refrescar detalle
+        const params = {
+          id: selected.id,
+        };
+        const list = await gasCall("listarGastosVariables", params);
+        const refreshed = Array.isArray(list) && list.length ? list[0] : null;
+        setSelected(refreshed);
+        setPago({ fechaPago: new Date().toISOString().slice(0, 10), monto: "", nota: "" });
+        // también refrescar tabla general (para estados/saldos)
+        await loadData();
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setPaying(false);
+      }
+    }
+
+    function PagoQuickFillRestante() {
+      if (!selected) return null;
+      const rest = Number(selected.pendiente || 0);
+      return (
+        <button
+          type="button"
+          className="btn btn-sm btn-outline-secondary"
+          onClick={() => setPago(prev => ({ ...prev, monto: rest > 0 ? rest : "" }))}
+          disabled={!(rest > 0)}
+          title="Completar el restante"
+        >
+          Completar restante
+        </button>
+      );
+    }
+
+    return (
+      <div className="container-fluid">
+
+        {/* Header */}
+        <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+          <div>
+            <div className="wbs-title">Gastos Variables</div>
+            <div className="text-muted small">
+              Registra compras (Amazon, envíos, supermercado) y deudas entre personas (deudor → acreedor).
+            </div>
+          </div>
+          <div className="d-flex gap-2">
+            <button className="btn btn-primary" onClick={openNew}>
+              <i className="bi bi-plus-lg me-2"></i>Nuevo gasto
+            </button>
+            <button className="btn btn-outline-secondary" onClick={loadData} disabled={loading}>
+              <i className={`bi ${loading ? "bi-arrow-repeat" : "bi-arrow-clockwise"} me-2`}></i>
+              Actualizar
+            </button>
+          </div>
+        </div>
+
+        {/* Resumen */}
+        <div className="row g-2 mt-3">
+          <div className="col-12 col-md-3">
+            <div className="wbs-card p-3">
+              <div className="text-muted small">Total</div>
+              <div className="fs-5 fw-bold">{_gvMoney(computed.total)}</div>
+            </div>
+          </div>
+          <div className="col-12 col-md-3">
+            <div className="wbs-card p-3">
+              <div className="text-muted small">Abonado</div>
+              <div className="fs-5 fw-bold">{_gvMoney(computed.abonado)}</div>
+            </div>
+          </div>
+          <div className="col-12 col-md-3">
+            <div className="wbs-card p-3">
+              <div className="text-muted small">Pendiente</div>
+              <div className="fs-5 fw-bold">{_gvMoney(computed.pendiente)}</div>
+            </div>
+          </div>
+          <div className="col-12 col-md-3">
+            <div className="wbs-card p-3">
+              <div className="text-muted small">Sin liquidar</div>
+              <div className="fs-5 fw-bold">{computed.pendientesCount}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Filtros */}
+        <div className="wbs-card p-3 mt-3">
+          <div className="row g-2 align-items-end">
+            <div className="col-12 col-md-2">
+              <label className="form-label small text-muted mb-1">Tipo</label>
+              <select className="form-select" value={fTipo} onChange={e => setFTipo(e.target.value)}>
+                <option value="">Todos</option>
+                {tiposDetectados
+                  .filter(t => t !== "Otro")
+                  .map(t => <option key={t} value={t}>{t}</option>)
+                }
+              </select>
+            </div>
+
+            <div className="col-12 col-md-2">
+              <label className="form-label small text-muted mb-1">Deudor</label>
+              <select className="form-select" value={fDeudorId} onChange={e => setFDeudorId(e.target.value)}>
+                <option value="">Todos</option>
+                {(personas || []).map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre || p.id}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="col-12 col-md-2">
+              <label className="form-label small text-muted mb-1">Acreedor</label>
+              <select className="form-select" value={fAcreedorId} onChange={e => setFAcreedorId(e.target.value)}>
+                <option value="">Todos</option>
+                {(personas || []).map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre || p.id}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="col-12 col-md-2">
+              <label className="form-label small text-muted mb-1">Estado</label>
+              <select className="form-select" value={fEstado} onChange={e => setFEstado(e.target.value)}>
+                <option value="">Todos</option>
+                <option value="Pendiente">Pendiente</option>
+                <option value="Parcial">Parcial</option>
+                <option value="Pagado">Pagado</option>
+              </select>
+            </div>
+
+            <div className="col-6 col-md-2">
+              <label className="form-label small text-muted mb-1">Desde</label>
+              <input type="date" className="form-control" value={fFrom} onChange={e => setFFrom(e.target.value)} />
+            </div>
+
+            <div className="col-6 col-md-2">
+              <label className="form-label small text-muted mb-1">Hasta</label>
+              <input type="date" className="form-control" value={fTo} onChange={e => setFTo(e.target.value)} />
+            </div>
+
+            <div className="col-12 col-md-6">
+              <label className="form-label small text-muted mb-1">Buscar</label>
+              <input
+                className="form-control"
+                value={q}
+                onChange={e => setQ(e.target.value)}
+                placeholder="Descripción, nombre, tipo..."
+              />
+            </div>
+
+            <div className="col-12 col-md-6 d-flex justify-content-end gap-2">
+              <button
+                className="btn btn-outline-secondary"
+                type="button"
+                onClick={() => loadData()}
+                disabled={loading}
+              >
+                <i className="bi bi-funnel me-2"></i>
+                Filtrar
+              </button>
+              <button
+                className="btn btn-outline-secondary"
+                type="button"
+                onClick={() => {
+                  const cleared = { tipo: "", deudorId: "", acreedorId: "", estado: "", fechaFrom: "", fechaTo: "", q: "" };
+                  setFTipo(""); setFDeudorId(""); setFAcreedorId(""); setFEstado(""); setFFrom(""); setFTo(""); setQ("");
+                  loadData(cleared);
+                }}
+                disabled={loading}
+              >
+                Limpiar filtros
+              </button>
+              <button className="btn btn-primary" type="button" onClick={openNew}>
+                <i className="bi bi-plus-lg me-2"></i>Nuevo
+              </button>
+            </div>
+          </div>
+
+          {error ? (
+            <div className="alert alert-danger mt-3 mb-0">
+              <i className="bi bi-exclamation-triangle me-2"></i>
+              {error}
+            </div>
+          ) : null}
+        </div>
+
+        {/* Main table (desktop) */}
+        <div className="wbs-card mt-3 d-none d-lg-block">
+          <div className="table-responsive">
+            <table className="table table-hover wbs-table mb-0 align-middle">
+              <thead>
+                <tr>
+                  <th style={{width: 110}}>Detalle</th>
+                  <th style={{width: 120}}>Fecha</th>
+                  <th style={{width: 140}}>Tipo</th>
+                  <th>Descripción</th>
+                  <th style={{width: 160}}>Deudor</th>
+                  <th style={{width: 160}}>Acreedor</th>
+                  <th className="text-end" style={{width: 140}}>Monto</th>
+                  <th className="text-end" style={{width: 140}}>Abonado</th>
+                  <th className="text-end" style={{width: 140}}>Pendiente</th>
+                  <th style={{width: 120}}>Estado</th>
+                  <th style={{width: 160}}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={11} className="text-center py-4 text-muted">
+                      <div className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+                      Cargando...
+                    </td>
+                  </tr>
+                ) : (computed.list || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={11} className="text-center py-4 text-muted">Sin registros con estos filtros.</td>
+                  </tr>
+                ) : (
+                  computed.list.map(r => (
+                    <tr key={r.id}>
+                      <td>
+                        <button className="btn btn-sm btn-outline-primary" onClick={() => openDetail(r)}>
+                          <i className="bi bi-eye me-1"></i> Ver
+                        </button>
+                      </td>
+                      <td>{_gvDate(r.fecha)}</td>
+                      <td>
+                        <span className="fw-semibold">{r.tipo || "—"}</span>
+                        <div className="text-muted small">#{_gvSafeIdLabel(r.id)}</div>
+                      </td>
+                      <td>
+                        <div className="fw-semibold">{r.descripcion || "—"}</div>
+                      </td>
+                      <td>{r.deudorNombre || "—"}</td>
+                      <td>{r.acreedorNombre || "—"}</td>
+                      <td className="text-end fw-semibold">{_gvMoney(r.monto)}</td>
+                      <td className="text-end">{_gvMoney(r.abonado)}</td>
+                      <td className="text-end">{_gvMoney(r.pendiente)}</td>
+                      <td>{_gvEstadoBadge(r.estado)}</td>
+                      <td>
+                        <div className="btn-group btn-group-sm" role="group" aria-label="Acciones">
+                          <button className="btn btn-outline-secondary" onClick={() => openEdit(r)}>
+                            <i className="bi bi-pencil"></i>
+                          </button>
+                          <button className="btn btn-outline-danger" onClick={() => onDelete(r)}>
+                            <i className="bi bi-trash"></i>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Mobile cards */}
+        <div className="d-lg-none mt-3">
+          {(computed.list || []).length === 0 ? (
+            <div className="wbs-card p-4 text-center text-muted">
+              {loading ? "Cargando..." : "Sin registros con estos filtros."}
+            </div>
+          ) : (
+            <div className="d-grid gap-2">
+              {computed.list.map(r => (
+                <div className="wbs-card p-3" key={r.id}>
+                  <div className="d-flex justify-content-between gap-2">
+                    <div>
+                      <div className="fw-bold">{r.tipo || "—"}</div>
+                      <div className="text-muted small">{_gvDate(r.fecha)} • #{_gvSafeIdLabel(r.id)}</div>
+                    </div>
+                    <div>{_gvEstadoBadge(r.estado)}</div>
+                  </div>
+
+                  <div className="mt-2">
+                    <div className="text-muted small">Descripción</div>
+                    <div className="fw-semibold">{r.descripcion || "—"}</div>
+                  </div>
+
+                  <div className="row g-2 mt-2">
+                    <div className="col-6">
+                      <div className="text-muted small">Deudor</div>
+                      <div className="fw-semibold">{r.deudorNombre || "—"}</div>
+                    </div>
+                    <div className="col-6">
+                      <div className="text-muted small">Acreedor</div>
+                      <div className="fw-semibold">{r.acreedorNombre || "—"}</div>
+                    </div>
+
+                    <div className="col-4">
+                      <div className="text-muted small">Monto</div>
+                      <div className="fw-bold">{_gvMoney(r.monto)}</div>
+                    </div>
+                    <div className="col-4">
+                      <div className="text-muted small">Abonado</div>
+                      <div className="fw-bold">{_gvMoney(r.abonado)}</div>
+                    </div>
+                    <div className="col-4">
+                      <div className="text-muted small">Pendiente</div>
+                      <div className="fw-bold">{_gvMoney(r.pendiente)}</div>
+                    </div>
+                  </div>
+
+                  <div className="d-flex gap-2 mt-3">
+                    <button className="btn btn-sm btn-outline-primary flex-fill" onClick={() => openDetail(r)}>
+                      <i className="bi bi-eye me-1"></i>Detalle
+                    </button>
+                    <button className="btn btn-sm btn-outline-secondary flex-fill" onClick={() => openEdit(r)}>
+                      <i className="bi bi-pencil me-1"></i>Editar
+                    </button>
+                    <button className="btn btn-sm btn-outline-danger flex-fill" onClick={() => onDelete(r)}>
+                      <i className="bi bi-trash me-1"></i>Eliminar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Modal Form (Nuevo/Editar) */}
+        <div className="modal fade" id="gvModalForm" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content">
+              <form onSubmit={onSave}>
+                <div className="modal-header">
+                  <div>
+                    <div className="modal-title fw-bold">
+                      {form.id ? "Editar gasto" : "Nuevo gasto"}
+                    </div>
+                    <div className="text-muted small">
+                      Deudor → Acreedor
+                    </div>
+                  </div>
+                  <button type="button" className="btn-close" onClick={() => bsModalHide("gvModalForm")} aria-label="Close"></button>
+                </div>
+
+                <div className="modal-body">
+                  <div className="row g-2">
+                    <div className="col-12">
+                      <label className="form-label">Tipo</label>
+                      <select
+                        className="form-select"
+                        value={form.tipo}
+                        onChange={e => setForm(prev => ({ ...prev, tipo: e.target.value }))}
+                      >
+                        {tiposDetectados.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                      {form.tipo === "Otro" ? (
+                        <input
+                          className="form-control mt-2"
+                          placeholder="Escribe el tipo (ej. Restaurante, Gasolina...)"
+                          value={form.tipoOtro}
+                          onChange={e => setForm(prev => ({ ...prev, tipoOtro: e.target.value }))}
+                        />
+                      ) : null}
+                    </div>
+
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Fecha</label>
+                      <input
+                        type="date"
+                        className="form-control"
+                        value={form.fecha}
+                        onChange={e => setForm(prev => ({ ...prev, fecha: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Monto</label>
+                      <div className="input-group">
+                        <span className="input-group-text">L.</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="form-control"
+                          value={form.monto}
+                          onChange={e => setForm(prev => ({ ...prev, monto: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Deudor (quien debe)</label>
+                      <select
+                        className="form-select"
+                        value={form.deudorId}
+                        onChange={e => setForm(prev => ({ ...prev, deudorId: e.target.value }))}
+                      >
+                        <option value="">Selecciona...</option>
+                        {(personas || []).map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.nombre || p.id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Acreedor (a quien se le debe)</label>
+                      <select
+                        className="form-select"
+                        value={form.acreedorId}
+                        onChange={e => setForm(prev => ({ ...prev, acreedorId: e.target.value }))}
+                      >
+                        <option value="">Selecciona...</option>
+                        {(personas || []).map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.nombre || p.id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="col-12">
+                      <label className="form-label">Descripción</label>
+                      <textarea
+                        className="form-control"
+                        rows="3"
+                        placeholder="Ej. Compra en Amazon de accesorios..."
+                        value={form.descripcion}
+                        onChange={e => setForm(prev => ({ ...prev, descripcion: e.target.value }))}
+                      />
+                    </div>
+
+                    {error ? (
+                      <div className="col-12">
+                        <div className="alert alert-danger mb-0">
+                          <i className="bi bi-exclamation-triangle me-2"></i>
+                          {error}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-outline-secondary" onClick={() => bsModalHide("gvModalForm")} disabled={saving}>
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn btn-primary" disabled={saving}>
+                    {saving ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                        Guardando...
+                      </>
+                    ) : (
+                      <>
+                        <i className="bi bi-check2 me-2"></i>Guardar
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        {/* Modal Detail */}
+        <div className="modal fade" id="gvModalDetail" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-dialog-centered modal-lg">
+            <div className="modal-content">
+              <div className="modal-header">
+                <div>
+                  <div className="modal-title fw-bold">
+                    Detalle de gasto #{_gvSafeIdLabel(selected?.id)}
+                  </div>
+                  <div className="text-muted small">
+                    {selected ? `${selected.deudorNombre || "—"} → ${selected.acreedorNombre || "—"}` : "—"}
+                  </div>
+                </div>
+                <button type="button" className="btn-close" onClick={() => bsModalHide("gvModalDetail")} aria-label="Close"></button>
+              </div>
+
+              <div className="modal-body">
+                {!selected ? (
+                  <div className="text-center text-muted py-4">Sin selección.</div>
+                ) : (
+                  <>
+                    {/* Resumen */}
+                    <div className="row g-2">
+                      <div className="col-12 col-md-4">
+                        <div className="wbs-card p-3">
+                          <div className="text-muted small">Monto</div>
+                          <div className="fs-5 fw-bold">{_gvMoney(selected.monto)}</div>
+                        </div>
+                      </div>
+                      <div className="col-12 col-md-4">
+                        <div className="wbs-card p-3">
+                          <div className="text-muted small">Abonado</div>
+                          <div className="fs-5 fw-bold">{_gvMoney(selected.abonado)}</div>
+                        </div>
+                      </div>
+                      <div className="col-12 col-md-4">
+                        <div className="wbs-card p-3">
+                          <div className="text-muted small">Pendiente</div>
+                          <div className="fs-5 fw-bold">{_gvMoney(selected.pendiente)}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="wbs-card p-3 mt-3">
+                      <div className="row g-2">
+                        <div className="col-12 col-md-4">
+                          <div className="text-muted small">Tipo</div>
+                          <div className="fw-semibold">{selected.tipo || "—"}</div>
+                        </div>
+                        <div className="col-12 col-md-4">
+                          <div className="text-muted small">Fecha</div>
+                          <div className="fw-semibold">{_gvDate(selected.fecha)}</div>
+                        </div>
+                        <div className="col-12 col-md-4">
+                          <div className="text-muted small">Estado</div>
+                          <div className="fw-semibold">{_gvEstadoBadge(selected.estado)}</div>
+                        </div>
+                        <div className="col-12">
+                          <div className="text-muted small">Descripción</div>
+                          <div className="fw-semibold">{selected.descripcion || "—"}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Pagos */}
+                    <div className="wbs-card p-3 mt-3">
+                      <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                        <div className="fw-bold">
+                          Pagos / Abonos <span className="text-muted fw-normal">({(selected.pagos || []).length})</span>
+                        </div>
+                        <div className="d-flex gap-2">
+                          <PagoQuickFillRestante />
+                        </div>
+                      </div>
+
+                      <div className="row g-2 mt-2 align-items-end">
+                        <div className="col-12 col-md-3">
+                          <label className="form-label small text-muted mb-1">Fecha de pago</label>
+                          <input
+                            type="date"
+                            className="form-control"
+                            value={pago.fechaPago}
+                            onChange={e => setPago(prev => ({ ...prev, fechaPago: e.target.value }))}
+                          />
+                        </div>
+                        <div className="col-12 col-md-3">
+                          <label className="form-label small text-muted mb-1">Monto</label>
+                          <div className="input-group">
+                            <span className="input-group-text">L.</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              className="form-control"
+                              value={pago.monto}
+                              onChange={e => setPago(prev => ({ ...prev, monto: e.target.value }))}
+                              placeholder="0.00"
+                            />
+                          </div>
+                        </div>
+                        <div className="col-12 col-md-4">
+                          <label className="form-label small text-muted mb-1">Nota (opcional)</label>
+                          <input
+                            className="form-control"
+                            value={pago.nota}
+                            onChange={e => setPago(prev => ({ ...prev, nota: e.target.value }))}
+                            placeholder="Ej. Transferencia BAC..."
+                          />
+                        </div>
+                        <div className="col-12 col-md-2 d-grid">
+                          <button
+                            className="btn btn-primary"
+                            type="button"
+                            onClick={onRegistrarPago}
+                            disabled={paying || !(Number(selected.pendiente || 0) > 0)}
+                            title={Number(selected.pendiente || 0) > 0 ? "Registrar pago" : "Ya está pagado"}
+                          >
+                            {paying ? (
+                              <>
+                                <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                Guardando...
+                              </>
+                            ) : (
+                              <>
+                                <i className="bi bi-cash-coin me-2"></i>Registrar
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="table-responsive mt-3">
+                        <table className="table table-sm align-middle mb-0">
+                          <thead>
+                            <tr>
+                              <th style={{width: 110}}>Fecha</th>
+                              <th className="text-end" style={{width: 140}}>Monto</th>
+                              <th>Nota</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(selected.pagos || []).length === 0 ? (
+                              <tr>
+                                <td colSpan={3} className="text-center text-muted py-3">
+                                  Sin pagos registrados.
+                                </td>
+                              </tr>
+                            ) : (
+                              (selected.pagos || []).map(p => (
+                                <tr key={p.id}>
+                                  <td>{_gvDate(p.fechaPago)}</td>
+                                  <td className="text-end fw-semibold">{_gvMoney(p.monto)}</td>
+                                  <td>{p.nota || "—"}</td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {error ? (
+                      <div className="alert alert-danger mt-3 mb-0">
+                        <i className="bi bi-exclamation-triangle me-2"></i>
+                        {error}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
+
+              <div className="modal-footer">
+                {selected ? (
+                  <div className="me-auto d-flex align-items-center gap-2">
+                    <button className="btn btn-outline-secondary" type="button" onClick={() => openEdit(selected)}>
+                      <i className="bi bi-pencil me-2"></i>Editar
+                    </button>
+                    <button className="btn btn-outline-danger" type="button" onClick={() => onDelete(selected)}>
+                      <i className="bi bi-trash me-2"></i>Eliminar
+                    </button>
+                  </div>
+                ) : <span className="me-auto"></span>}
+
+                <button type="button" className="btn btn-outline-secondary" onClick={() => bsModalHide("gvModalDetail")}>
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    );
+  }
+</script>

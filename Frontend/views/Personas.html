@@ -1,0 +1,412 @@
+<script type="text/babel">
+  /**
+   * View: Personas (CRUD)
+   * Hoja: PERSONAS
+   */
+
+  function bsModalShow(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    // Preferimos Bootstrap JS si está disponible
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(el).show();
+      return;
+    }
+
+    // Fallback (sin bootstrap.js): mostrar modal manualmente
+    try {
+      // Bind de botones con data-bs-dismiss="modal"
+      if (!el.dataset.wbsBindDismiss) {
+        el.dataset.wbsBindDismiss = '1';
+        el.addEventListener('click', (ev) => {
+          const btn = ev.target.closest('[data-bs-dismiss="modal"]');
+          if (btn) {
+            ev.preventDefault();
+            bsModalHide(id);
+          }
+        });
+      }
+
+      el.style.display = 'block';
+      el.classList.add('show');
+      el.removeAttribute('aria-hidden');
+      el.setAttribute('aria-modal', 'true');
+      document.body.classList.add('modal-open');
+
+      // Backdrop
+      const bd = document.createElement('div');
+      bd.className = 'modal-backdrop fade show';
+      bd.dataset.modalFor = id;
+      document.body.appendChild(bd);
+
+      // Tap en backdrop cierra
+      bd.addEventListener('click', () => bsModalHide(id));
+
+      // Enfocar primer input para facilitar en móvil
+      setTimeout(() => {
+        const focusable = el.querySelector('input, select, textarea, button');
+        if (focusable && focusable.focus) focusable.focus();
+      }, 50);
+    } catch (e) {
+      // no-op
+    }
+  }
+
+  function bsModalHide(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (window.bootstrap?.Modal) {
+      const inst = window.bootstrap.Modal.getInstance(el) || window.bootstrap.Modal.getOrCreateInstance(el);
+      inst.hide();
+      return;
+    }
+
+    try {
+      el.classList.remove('show');
+      el.style.display = 'none';
+      el.setAttribute('aria-hidden', 'true');
+      el.removeAttribute('aria-modal');
+
+      document.querySelectorAll('.modal-backdrop').forEach(bd => {
+        if (bd?.dataset?.modalFor === id) bd.remove();
+      });
+
+      // Quitar modal-open solo si no quedan modales abiertos
+      const anyOpen = document.querySelector('.modal.show');
+      if (!anyOpen) document.body.classList.remove('modal-open');
+    } catch (e) {
+      // no-op
+    }
+  }
+
+  function toISODateInput(v) {
+    if (!v) return "";
+    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    const s = String(v).trim();
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) {
+      const dd = String(m[1]).padStart(2, "0");
+      const mm = String(m[2]).padStart(2, "0");
+      return `${m[3]}-${mm}-${dd}`;
+    }
+    const d = new Date(s);
+    if (d.toString() !== "Invalid Date") {
+      const y = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return `${y}-${mm}-${dd}`;
+    }
+    return "";
+  }
+
+  function fmtFecha(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (d.toString() === "Invalid Date") return String(iso);
+    return d.toLocaleDateString("es-HN", { year: "numeric", month: "2-digit", day: "2-digit" });
+  }
+
+  function PersonasView() {
+    const [loading, setLoading] = React.useState(false);
+    const [saving, setSaving] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const [items, setItems] = React.useState([]);
+
+    const [filters, setFilters] = React.useState({ q: "", estado: "" });
+
+    const emptyForm = React.useMemo(() => ({
+      id_persona: "",
+      nombre_persona: "",
+      fecha_nacimiento: "",
+      genero: "",
+      telefono: "",
+      estado: "Activo"
+    }), []);
+
+    const [formMode, setFormMode] = React.useState("create");
+    const [form, setForm] = React.useState(emptyForm);
+
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const res = await gasCall("listarPersonas", { ...filters });
+        setItems(Array.isArray(res) ? res : []);
+      } catch (e) {
+        setItems([]);
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    React.useEffect(() => { load(); }, []); // eslint-disable-line
+
+    async function onSave(e) {
+      e.preventDefault();
+      setSaving(true);
+      setError("");
+      try {
+        const payload = {
+          ...form,
+          fecha_nacimiento: toISODateInput(form.fecha_nacimiento)
+        };
+        const r = await gasCall("guardarPersona", payload);
+        if (!r || !r.ok) throw new Error(r?.message || "No se pudo guardar.");
+        bsModalHide("modalPersona");
+        setForm(emptyForm);
+        setFormMode("create");
+        await load();
+      } catch (e2) {
+        setError(String(e2?.message || e2));
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    function openCreate() {
+      setFormMode("create");
+      setForm({ ...emptyForm });
+      bsModalShow("modalPersona");
+    }
+
+    function openEdit(p) {
+      setFormMode("edit");
+      setForm({
+        id_persona: String(p?.id_persona || ""),
+        nombre_persona: String(p?.nombre_persona || ""),
+        fecha_nacimiento: toISODateInput(p?.fecha_nacimiento),
+        genero: String(p?.genero || ""),
+        telefono: String(p?.telefono || ""),
+        estado: String(p?.estado || "Activo")
+      });
+      bsModalShow("modalPersona");
+    }
+
+    async function onDelete(p) {
+      const id = p?.id_persona;
+      if (!id) return;
+      if (!window.confirm(`¿Eliminar la persona "${p?.nombre_persona || id}"?`)) return;
+      setLoading(true);
+      setError("");
+      try {
+        await gasCall("eliminarPersona", String(id));
+        await load();
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    const filtered = React.useMemo(() => {
+      const q = filters.q.trim().toLowerCase();
+      const est = filters.estado.trim().toLowerCase();
+      return (items || []).filter(p => {
+        if (est && String(p.estado || "").toLowerCase() !== est) return false;
+        if (!q) return true;
+        const hay = `${p.id_persona} ${p.nombre_persona} ${p.telefono} ${p.genero}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }, [items, filters]);
+
+    return (
+      <div className="wbs-page">
+        <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+          <div>
+            <h2 className="wbs-page-title mb-0">Personas</h2>
+            <div className="text-muted tiny">Registro de personas (hoja PERSONAS)</div>
+          </div>
+          <button className="btn btn-dark" onClick={openCreate}>
+            <i className="bi bi-plus-lg me-2"></i>
+            Nueva Persona
+          </button>
+        </div>
+
+        <div className="card border-0 shadow-sm mb-3">
+          <div className="card-body">
+            <div className="row g-2">
+              <div className="col-12 col-md-8">
+                <div className="input-group">
+                  <span className="input-group-text"><i className="bi bi-search"></i></span>
+                  <input
+                    className="form-control"
+                    placeholder="Buscar por nombre, id, teléfono..."
+                    value={filters.q}
+                    onChange={(e) => setFilters(prev => ({ ...prev, q: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="col-12 col-md-4">
+                <select
+                  className="form-select"
+                  value={filters.estado}
+                  onChange={(e) => setFilters(prev => ({ ...prev, estado: e.target.value }))}
+                >
+                  <option value="">Estado (todos)</option>
+                  <option value="Activo">Activo</option>
+                  <option value="Inactivo">Inactivo</option>
+                </select>
+              </div>
+              <div className="col-12 d-flex justify-content-end">
+                <button className="btn btn-outline-dark" onClick={load} disabled={loading}>
+                  {loading ? <SpinnerInline label="Actualizando" /> : (<><i className="bi bi-arrow-clockwise me-2"></i>Actualizar</>)}
+                </button>
+              </div>
+            </div>
+            {error && <div className="alert alert-danger mt-3 mb-0">{error}</div>}
+          </div>
+        </div>
+
+        <div className="card border-0 shadow-sm">
+          <div className="card-body">
+            <div className="d-flex align-items-center justify-content-between mb-2">
+              <div className="text-muted tiny">
+                {filtered.length} registro(s)
+              </div>
+            </div>
+
+            <div className="table-responsive">
+              <table className="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th style={{ width: 90 }}>ID</th>
+                    <th>Nombre</th>
+                    <th style={{ width: 160 }}>Nacimiento</th>
+                    <th style={{ width: 140 }}>Género</th>
+                    <th style={{ width: 160 }}>Teléfono</th>
+                    <th style={{ width: 110 }}>Estado</th>
+                    <th style={{ width: 120 }} className="text-end">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(p => (
+                    <tr key={String(p.id_persona || Math.random())}>
+                      <td className="fw-bold">{p.id_persona || "—"}</td>
+                      <td>{p.nombre_persona || "—"}</td>
+                      <td>{fmtFecha(p.fecha_nacimiento)}</td>
+                      <td>{p.genero || "—"}</td>
+                      <td>{p.telefono || "—"}</td>
+                      <td>
+                        <span className={`badge rounded-pill ${String(p.estado || "").toLowerCase() === "activo" ? "bg-success" : "bg-secondary"}`}>
+                          {p.estado || "—"}
+                        </span>
+                      </td>
+                      <td className="text-end">
+                        <div className="btn-group btn-group-sm" role="group">
+                          <button className="btn btn-outline-dark" onClick={() => openEdit(p)} title="Editar">
+                            <i className="bi bi-pencil"></i>
+                          </button>
+                          <button className="btn btn-outline-danger" onClick={() => onDelete(p)} title="Eliminar">
+                            <i className="bi bi-trash"></i>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan="7" className="text-center text-muted py-4">
+                        {loading ? "Cargando..." : "Sin registros"}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Modal Persona */}
+        <div className="modal fade" id="modalPersona" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content">
+              <form onSubmit={onSave}>
+                <div className="modal-header">
+                  <h5 className="modal-title">{formMode === "create" ? "Nueva Persona" : "Editar Persona"}</h5>
+                  <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div className="modal-body">
+                  {error && <div className="alert alert-danger">{error}</div>}
+
+                  {formMode === "edit" && (
+                    <div className="mb-3">
+                      <label className="form-label">ID</label>
+                      <input className="form-control" value={form.id_persona} disabled />
+                    </div>
+                  )}
+
+                  <div className="mb-3">
+                    <label className="form-label"><span className="req">*</span> Nombre</label>
+                    <input
+                      className="form-control"
+                      value={form.nombre_persona}
+                      onChange={(e) => setForm(prev => ({ ...prev, nombre_persona: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <div className="row g-2">
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Fecha de nacimiento</label>
+                      <input
+                        type="date"
+                        className="form-control"
+                        value={form.fecha_nacimiento}
+                        onChange={(e) => setForm(prev => ({ ...prev, fecha_nacimiento: e.target.value }))}
+                      />
+                    </div>
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Género</label>
+                      <select
+                        className="form-select"
+                        value={form.genero}
+                        onChange={(e) => setForm(prev => ({ ...prev, genero: e.target.value }))}
+                      >
+                        <option value="">(Sin especificar)</option>
+                        <option value="Masculino">Masculino</option>
+                        <option value="Femenino">Femenino</option>
+                        <option value="Otro">Otro</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="row g-2 mt-1">
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Teléfono</label>
+                      <input
+                        className="form-control"
+                        value={form.telefono}
+                        onChange={(e) => setForm(prev => ({ ...prev, telefono: e.target.value }))}
+                        placeholder="Ej: 89161389"
+                      />
+                    </div>
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Estado</label>
+                      <select
+                        className="form-select"
+                        value={form.estado}
+                        onChange={(e) => setForm(prev => ({ ...prev, estado: e.target.value }))}
+                      >
+                        <option value="Activo">Activo</option>
+                        <option value="Inactivo">Inactivo</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-outline-dark" data-bs-dismiss="modal">Cancelar</button>
+                  <button type="submit" className="btn btn-dark" disabled={saving}>
+                    {saving ? <SpinnerInline label="Guardando" /> : "Guardar"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+</script>

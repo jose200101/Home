@@ -1,0 +1,1085 @@
+<script type="text/babel">
+  /**
+   * View: Gastos Fijos (facturas recurrentes)
+   * - Registro mensual (periodo: YYYY-MM)
+   * - Reparto de aportes por persona (montos exactos)
+   * - UI tipo "Ventas": filtros arriba + tabla + botón "Nuevo"
+   */
+
+  // Utils
+  const GF = {
+    currency: new Intl.NumberFormat("es-HN", { style: "currency", currency: "HNL" }),
+    money(v) {
+      const n = typeof v === "number" ? v : parseFloat(String(v || "").replace(/[^0-9.\-]/g, ""));
+      return this.currency.format(isNaN(n) ? 0 : n);
+    },
+    toNum(v) {
+      const n = typeof v === "number" ? v : parseFloat(String(v || "").replace(/[^0-9.\-]/g, ""));
+      return isNaN(n) ? 0 : n;
+    },
+    toISODate(d) {
+      if (!d) return "";
+      // ya viene YYYY-MM-DD
+      if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+      const dt = (d instanceof Date) ? d : new Date(d);
+      if (dt.toString() === "Invalid Date") return "";
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, "0");
+      const day = String(dt.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    },
+    fmtDate(iso) {
+      if (!iso) return "—";
+      const dt = new Date(iso);
+      if (dt.toString() === "Invalid Date") return String(iso);
+      return dt.toLocaleDateString("es-HN", { year: "numeric", month: "short", day: "2-digit" });
+    },
+    monthLabel(yyyyMm) {
+      if (!yyyyMm) return "";
+      const [y, m] = String(yyyyMm).split("-").map(s => parseInt(s, 10));
+      if (!y || !m) return yyyyMm;
+      const dt = new Date(y, m - 1, 1);
+      return dt.toLocaleDateString("es-HN", { year: "numeric", month: "long" });
+    },
+    todayISO() {
+      return this.toISODate(new Date());
+    },
+    isPast(iso) {
+      if (!iso) return false;
+      const dt = new Date(iso);
+      if (dt.toString() === "Invalid Date") return false;
+      const d0 = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+      const now = new Date();
+      const n0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return d0.getTime() < n0.getTime();
+    },
+    daysBetween(isoA, isoB) {
+      const a = new Date(isoA);
+      const b = new Date(isoB);
+      if (a.toString() === "Invalid Date" || b.toString() === "Invalid Date") return 9999;
+      const ms = (b.getTime() - a.getTime());
+      return Math.round(ms / (1000 * 60 * 60 * 24));
+    }
+  };
+
+  function gfEstadoDerivado(g) {
+    const total = GF.toNum(g.totalFactura);
+    const aportado = Array.isArray(g.aportes)
+      ? g.aportes.reduce((acc, a) => acc + (a.pagado ? GF.toNum(a.monto) : 0), 0)
+      : GF.toNum(g.aportado);
+    const pendiente = Math.max(0, total - aportado);
+    let estado = "Pendiente";
+    if (total > 0 && pendiente <= 0.000001) estado = "Pagado";
+    else if (aportado > 0.000001) estado = "Parcial";
+    if (GF.isPast(g.vence) && estado !== "Pagado") estado = "Vencido";
+    return { estado, aportado, pendiente };
+  }
+
+  function EstadoBadge({ estado }) {
+    const s = String(estado || "Pendiente");
+    const key = s.toLowerCase();
+    const map = {
+      "pagado": "bg-success",
+      "parcial": "bg-primary",
+      "pendiente": "bg-warning text-dark",
+      "vencido": "bg-danger",
+    };
+    const cls = map[key] || "bg-secondary";
+    return <span className={`badge rounded-pill ${cls}`}>{s}</span>;
+  }
+
+  function bsModalShow(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    // Preferimos Bootstrap JS si está disponible
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(el).show();
+      return;
+    }
+
+    // Fallback (sin bootstrap.js): mostrar modal manualmente
+    try {
+      // Bind de botones con data-bs-dismiss="modal"
+      if (!el.dataset.wbsBindDismiss) {
+        el.dataset.wbsBindDismiss = '1';
+        el.addEventListener('click', (ev) => {
+          const btn = ev.target.closest('[data-bs-dismiss="modal"]');
+          if (btn) {
+            ev.preventDefault();
+            bsModalHide(id);
+          }
+        });
+      }
+
+      el.style.display = 'block';
+      el.classList.add('show');
+      el.removeAttribute('aria-hidden');
+      el.setAttribute('aria-modal', 'true');
+      document.body.classList.add('modal-open');
+
+      // Backdrop
+      const bd = document.createElement('div');
+      bd.className = 'modal-backdrop fade show';
+      bd.dataset.modalFor = id;
+      document.body.appendChild(bd);
+
+      // Tap en backdrop cierra
+      bd.addEventListener('click', () => bsModalHide(id));
+
+      // Enfocar primer input para facilitar en móvil
+      setTimeout(() => {
+        const focusable = el.querySelector('input, select, textarea, button');
+        if (focusable && focusable.focus) focusable.focus();
+      }, 50);
+    } catch (e) {
+      // no-op
+    }
+  }
+
+  function bsModalHide(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    if (window.bootstrap?.Modal) {
+      const inst = window.bootstrap.Modal.getInstance(el) || window.bootstrap.Modal.getOrCreateInstance(el);
+      inst.hide();
+      return;
+    }
+
+    try {
+      el.classList.remove('show');
+      el.style.display = 'none';
+      el.setAttribute('aria-hidden', 'true');
+      el.removeAttribute('aria-modal');
+
+      document.querySelectorAll('.modal-backdrop').forEach(bd => {
+        if (bd?.dataset?.modalFor === id) bd.remove();
+      });
+
+      // Quitar modal-open solo si no quedan modales abiertos
+      const anyOpen = document.querySelector('.modal.show');
+      if (!anyOpen) document.body.classList.remove('modal-open');
+    } catch (e) {
+      // no-op
+    }
+  }
+
+  function buildPeriodList() {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 12, 1);
+    const periods = [];
+    for (let i = 0; i < 24; i++) {
+      const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      periods.push(`${y}-${m}`);
+    }
+    return periods;
+  }
+
+  function GastosFijosView({ user }) {
+    const [loading, setLoading] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const [gastos, setGastos] = React.useState([]);
+    const [aportantes, setAportantes] = React.useState([]);
+
+    const periodOptions = React.useMemo(() => buildPeriodList(), []);
+    const defaultPeriodo = React.useMemo(() => {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, "0");
+      return `${y}-${m}`;
+    }, []);
+
+    const [filters, setFilters] = React.useState({
+      servicio: "",
+      periodo: "", // vacío = todos (no filtrar automáticamente)
+      estado: "",
+      venceFrom: "",
+      venceTo: "",
+      personaId: "",
+      q: ""
+    });
+
+    const [activeGasto, setActiveGasto] = React.useState(null);
+
+    // Modal form (nuevo/editar)
+    const emptyForm = React.useMemo(() => ({
+      id: "",
+      servicio: "",
+      periodo: defaultPeriodo,
+      vence: "",
+      proveedor: "",
+      descripcion: "",
+      totalFactura: "",
+      aportes: []
+    }), [defaultPeriodo]);
+
+    const [formMode, setFormMode] = React.useState("create"); // create | edit
+    const [form, setForm] = React.useState(emptyForm);
+    const [saving, setSaving] = React.useState(false);
+
+    const servicios = [
+      "Energía",
+      "Agua potable",
+      "Internet",
+      "Cable",
+      "Alquiler",
+      "Basura",
+      "Otro",
+    ];
+
+    async function loadAll() {
+      setLoading(true);
+      setError("");
+      try {
+        // 1) Personas (aportantes)
+        let ppl = [];
+        try {
+          ppl = await gasCall("listarUsuariosActivos");
+        } catch (e) {
+          // Si todavía no existe la función en backend, no bloqueamos UI
+          ppl = [];
+        }
+        setAportantes(Array.isArray(ppl) ? ppl : []);
+
+        // 2) Gastos
+        let items = [];
+        try {
+          items = await gasCall("listarGastosFijos", { ...filters });
+        } catch (e) {
+          items = [];
+        }
+        setGastos(Array.isArray(items) ? items : []);
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    React.useEffect(() => { loadAll(); }, []); // eslint-disable-line
+
+    async function applyFilters() {
+      setLoading(true);
+      setError("");
+      try {
+        const items = await gasCall("listarGastosFijos", { ...filters });
+        const safe = Array.isArray(items) ? items : [];
+        setGastos(safe);
+        return safe;
+      } catch (e) {
+        // Si el backend aún no está listo, no rompemos la app
+        setGastos([]);
+        setError("No se pudo cargar desde el backend. Verifica las hojas o las funciones en Apps Script.");
+        return [];
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function clearFilters() {
+      const cleared = { servicio: "", periodo: "", estado: "", venceFrom: "", venceTo: "", personaId: "", q: "" };
+      setFilters(cleared);
+      setLoading(true);
+      setError("");
+      try {
+        const items = await gasCall("listarGastosFijos", { ...cleared });
+        setGastos(Array.isArray(items) ? items : []);
+      } catch (e) {
+        setGastos([]);
+        setError("No se pudo cargar desde el backend. Verifica las hojas o las funciones en Apps Script.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    const computed = React.useMemo(() => {
+      const items = (gastos || []).map(g => {
+        const d = gfEstadoDerivado(g);
+        return { ...g, ...d };
+      });
+
+      const totalMes = items.reduce((acc, g) => acc + GF.toNum(g.totalFactura), 0);
+      const aportadoMes = items.reduce((acc, g) => acc + GF.toNum(g.aportado), 0);
+      const pendienteMes = items.reduce((acc, g) => acc + GF.toNum(g.pendiente), 0);
+
+      const hoy = GF.todayISO();
+      const proximos = items.filter(g => {
+        if (!g.vence) return false;
+        if (String(g.estado || "").toLowerCase() === "pagado") return false;
+        const diff = GF.daysBetween(hoy, g.vence);
+        return diff >= 0 && diff <= 7;
+      }).length;
+
+      return { items, totalMes, aportadoMes, pendienteMes, proximos };
+    }, [gastos]);
+
+    function openCreate() {
+      setFormMode("create");
+      setForm({ ...emptyForm, periodo: filters.periodo || defaultPeriodo });
+      bsModalShow("gfModalForm");
+    }
+
+    function openEdit(g) {
+      setFormMode("edit");
+      const copy = {
+        id: g.id,
+        servicio: g.servicio || "",
+        periodo: g.periodo || defaultPeriodo,
+        vence: GF.toISODate(g.vence),
+        proveedor: g.proveedor || "",
+        descripcion: g.descripcion || "",
+        totalFactura: String(g.totalFactura ?? ""),
+        aportes: Array.isArray(g.aportes) ? g.aportes.map(a => ({
+          id: a.id || "",
+          personaId: a.personaId || "",
+          personaNombre: a.personaNombre || "",
+          monto: String(a.monto ?? ""),
+          pagado: !!a.pagado,
+          fechaPago: a.fechaPago || "",
+        })) : []
+      };
+      setForm(copy);
+      bsModalShow("gfModalForm");
+    }
+
+    function openDetail(g) {
+      setActiveGasto({ ...g, ...gfEstadoDerivado(g) });
+      bsModalShow("gfModalDetail");
+    }
+
+    function addAporteRow() {
+      setForm(prev => ({
+        ...prev,
+        aportes: [...(prev.aportes || []), { id: "", personaId: "", personaNombre: "", monto: "", pagado: false, fechaPago: "" }]
+      }));
+    }
+
+    function removeAporteRow(idx) {
+      setForm(prev => {
+        const next = [...(prev.aportes || [])];
+        next.splice(idx, 1);
+        return { ...prev, aportes: next };
+      });
+    }
+
+    const formTotals = React.useMemo(() => {
+      const total = GF.toNum(form.totalFactura);
+      const suma = (form.aportes || []).reduce((acc, a) => acc + GF.toNum(a.monto), 0);
+      return { total, suma, pendiente: Math.max(0, total - suma) };
+    }, [form]);
+
+    async function saveForm(e) {
+      e?.preventDefault?.();
+      setError("");
+
+      // Validación mínima
+      if (!String(form.servicio || "").trim()) {
+        setError("Selecciona el servicio.");
+        return;
+      }
+      if (!String(form.periodo || "").trim()) {
+        setError("Selecciona el periodo (mes/año).");
+        return;
+      }
+      if (!String(form.proveedor || "").trim()) {
+        setError("Ingresa el proveedor.");
+        return;
+      }
+      if (GF.toNum(form.totalFactura) <= 0) {
+        setError("Ingresa un total de factura válido.");
+        return;
+      }
+      // Aportes: permitir 0, pero si existen, validar
+      const bad = (form.aportes || []).some(a => (a.personaId || a.personaNombre || a.monto) && GF.toNum(a.monto) <= 0);
+      if (bad) {
+        setError("Revisa los aportes: cada aporte debe tener un monto mayor a 0.");
+        return;
+      }
+      if ((form.aportes || []).length && formTotals.suma - formTotals.total > 0.000001) {
+        setError("La suma de aportes no puede ser mayor al total de la factura.");
+        return;
+      }
+
+      setSaving(true);
+      try {
+        const payload = {
+          ...form,
+          totalFactura: GF.toNum(form.totalFactura),
+          vence: GF.toISODate(form.vence),
+          creadoPor: user?.nombre_usuario || "",
+          aportes: (form.aportes || []).filter(a => {
+            const hasAnything = String(a.personaId || "").trim() || String(a.personaNombre || "").trim() || String(a.monto || "").trim();
+            return hasAnything;
+          }).map(a => {
+            // Si hay personaId, completamos nombre desde aportantes (si aplica)
+            let personaNombre = String(a.personaNombre || "").trim();
+            if (a.personaId && !personaNombre) {
+              const found = (aportantes || []).find(p => String(p.id) === String(a.personaId));
+              personaNombre = found?.nombreCompleto || found?.nombre_usuario || "";
+            }
+            return {
+              id: a.id || "",
+              personaId: a.personaId || "",
+              personaNombre,
+              monto: GF.toNum(a.monto),
+              pagado: !!a.pagado,
+              fechaPago: a.fechaPago || "",
+            };
+          })
+        };
+
+        const res = await gasCall("guardarGastoFijo", payload);
+        if (!res || !res.ok) throw new Error(res?.message || "No se pudo guardar.");
+
+        bsModalHide("gfModalForm");
+        // Recargar lista con filtros actuales
+        await applyFilters();
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    async function deleteGasto(id) {
+      if (!id) return;
+      if (!confirm("¿Eliminar este gasto fijo? Esta acción no se puede deshacer.")) return;
+      setLoading(true);
+      setError("");
+      try {
+        const res = await gasCall("eliminarGastoFijo", id);
+        if (!res || !res.ok) throw new Error(res?.message || "No se pudo eliminar.");
+        await applyFilters();
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function markAllPaid(id) {
+      if (!id) return;
+      setLoading(true);
+      setError("");
+      try {
+        const res = await gasCall("marcarGastoFijoPagado", id);
+        if (!res || !res.ok) throw new Error(res?.message || "No se pudo marcar como pagado.");
+        const fresh = await applyFilters();
+        if (activeGasto && activeGasto.id === id) {
+          const next = (fresh || []).find(x => x.id === id);
+          if (next) setActiveGasto({ ...next, ...gfEstadoDerivado(next) });
+        }
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function toggleAportePagado(aporteId, checked) {
+      if (!activeGasto) return;
+      setLoading(true);
+      setError("");
+      try {
+        const res = await gasCall("marcarAportePagado", aporteId, !!checked);
+        if (!res || !res.ok) throw new Error(res?.message || "No se pudo actualizar el aporte.");
+        // recarga lista + detail
+        const fresh = await applyFilters();
+        const next = (fresh || []).find(x => x.id === activeGasto.id);
+        if (next) setActiveGasto({ ...next, ...gfEstadoDerivado(next) });
+      } catch (e) {
+        setError(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    return (
+      <div className="wbs-page">
+        <div className="d-flex flex-wrap align-items-end justify-content-between gap-2">
+          <div>
+            <h2 className="wbs-page-title mb-0">Gastos Fijos</h2>
+            <div className="wbs-meta mt-1">Facturas recurrentes • Periodo {filters.periodo ? GF.monthLabel(filters.periodo) : 'Todos'}</div>
+          </div>
+          <div className="d-flex gap-2 flex-wrap">
+            <span className="wbs-chip"><span className="wbs-chip-dot"></span>Control mensual</span>
+          </div>
+        </div>
+
+        {/* Summary cards */}
+        <div className="row g-3 mt-1">
+          <div className="col-12 col-sm-6 col-lg-3">
+            <div className="wbs-stat soft-yellow">
+              <div className="label">Total del mes</div>
+              <div className="value">{GF.money(computed.totalMes)}</div>
+              <div className="sub">Suma de facturas del periodo</div>
+            </div>
+          </div>
+          <div className="col-12 col-sm-6 col-lg-3">
+            <div className="wbs-stat soft-blue">
+              <div className="label">Pendiente por aportar</div>
+              <div className="value">{GF.money(computed.pendienteMes)}</div>
+              <div className="sub">Total - aportado</div>
+            </div>
+          </div>
+          <div className="col-12 col-sm-6 col-lg-3">
+            <div className="wbs-stat soft-green">
+              <div className="label">Aportado</div>
+              <div className="value">{GF.money(computed.aportadoMes)}</div>
+              <div className="sub">Aportes marcados como pagados</div>
+            </div>
+          </div>
+          <div className="col-12 col-sm-6 col-lg-3">
+            <div className="wbs-stat soft-purple">
+              <div className="label">Próximos vencimientos</div>
+              <div className="value">{computed.proximos}</div>
+              <div className="sub">En los próximos 7 días</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Filters + Action */}
+        <div className="wbs-card p-3 mt-3">
+          <div className="row g-2 align-items-end">
+            <div className="col-12 col-md-3">
+              <label className="form-label small mb-1">Servicio</label>
+              <select
+                className="form-select"
+                value={filters.servicio}
+                onChange={(e) => setFilters(f => ({ ...f, servicio: e.target.value }))}
+              >
+                <option value="">Todos</option>
+                {servicios.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            <div className="col-6 col-md-2">
+              <label className="form-label small mb-1">Periodo</label>
+              <select
+                className="form-select"
+                value={filters.periodo}
+                onChange={(e) => setFilters(f => ({ ...f, periodo: e.target.value }))}
+              >
+                <option value="">Todos</option>
+                {periodOptions.map(p => <option key={p} value={p}>{GF.monthLabel(p)}</option>)}
+              </select>
+            </div>
+
+            <div className="col-6 col-md-2">
+              <label className="form-label small mb-1">Estado</label>
+              <select
+                className="form-select"
+                value={filters.estado}
+                onChange={(e) => setFilters(f => ({ ...f, estado: e.target.value }))}
+              >
+                <option value="">Todos</option>
+                <option value="Pendiente">Pendiente</option>
+                <option value="Parcial">Parcial</option>
+                <option value="Pagado">Pagado</option>
+                <option value="Vencido">Vencido</option>
+              </select>
+            </div>
+
+            <div className="col-6 col-lg-2">
+              <label className="form-label small mb-1">Desde</label>
+              <input
+                type="date"
+                className="form-control"
+                value={filters.venceFrom}
+                onChange={(e) => setFilters(f => ({ ...f, venceFrom: e.target.value }))}
+              />
+            </div>
+
+            <div className="col-6 col-lg-2">
+              <label className="form-label small mb-1">Hasta</label>
+              <input
+                type="date"
+                className="form-control"
+                value={filters.venceTo}
+                onChange={(e) => setFilters(f => ({ ...f, venceTo: e.target.value }))}
+              />
+            </div>
+
+            <div className="col-6 col-md-2">
+              <label className="form-label small mb-1">Desde</label>
+              <input
+                type="date"
+                className="form-control"
+                value={filters.venceFrom}
+                onChange={(e) => setFilters(f => ({ ...f, venceFrom: e.target.value }))}
+              />
+            </div>
+
+            <div className="col-6 col-md-2">
+              <label className="form-label small mb-1">Hasta</label>
+              <input
+                type="date"
+                className="form-control"
+                value={filters.venceTo}
+                onChange={(e) => setFilters(f => ({ ...f, venceTo: e.target.value }))}
+              />
+            </div>
+
+            <div className="col-12 col-md-3">
+              <label className="form-label small mb-1">Persona aportante (opcional)</label>
+              <select
+                className="form-select"
+                value={filters.personaId}
+                onChange={(e) => setFilters(f => ({ ...f, personaId: e.target.value }))}
+              >
+                <option value="">Todas</option>
+                {(aportantes || []).map(p => (
+                  <option key={p.id || p.nombre_usuario} value={p.id}>{p.nombreCompleto || p.nombre_usuario}</option>
+                ))}
+              </select>
+              {(aportantes || []).length === 0 ? (
+                <div className="text-muted small mt-1">Tip: agrega personas en la hoja USUARIOS.</div>
+              ) : null}
+            </div>
+
+            <div className="col-12 col-md-2">
+              <label className="form-label small mb-1">Buscar</label>
+              <input
+                className="form-control"
+                placeholder="Proveedor / descripción"
+                value={filters.q}
+                onChange={(e) => setFilters(f => ({ ...f, q: e.target.value }))}
+              />
+            </div>
+
+            <div className="col-12 d-flex gap-2 justify-content-end mt-2">
+              <button className="btn btn-outline-secondary" onClick={clearFilters} disabled={loading}>
+                <i className="bi bi-x-circle me-2"></i>
+                Limpiar filtros
+              </button>
+              <button className="btn btn-outline-secondary" onClick={applyFilters} disabled={loading}>
+                {loading ? <SpinnerInline label="" /> : <i className="bi bi-funnel me-2"></i>}
+                Filtrar
+              </button>
+              <button className="btn btn-gold" onClick={openCreate}>
+                <i className="bi bi-plus-lg me-2"></i>
+                Nuevo gasto fijo
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="alert alert-danger mt-3 mb-0">
+            <i className="bi bi-exclamation-triangle me-2"></i>
+            {error}
+          </div>
+        ) : null}
+
+        {/* Main table (desktop) */}
+        <div className="wbs-card mt-3 d-none d-lg-block">
+          <div className="table-responsive">
+            <table className="table table-hover wbs-table mb-0 align-middle">
+              <thead>
+                <tr>
+                  <th style={{width: 110}}>Detalle</th>
+                  <th>Servicio</th>
+                  <th>Periodo</th>
+                  <th>Vence</th>
+                  <th>Proveedor</th>
+                  <th className="text-end">Total</th>
+                  <th className="text-end">Aportado</th>
+                  <th className="text-end">Pendiente</th>
+                  <th>Estado</th>
+                  <th style={{width: 170}} className="text-end">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(computed.items || []).length === 0 ? (
+                  <tr>
+                    <td colSpan="10" className="text-center text-muted py-5">
+                      {loading ? "Cargando..." : "Sin registros con estos filtros."}
+                    </td>
+                  </tr>
+                ) : (
+                  computed.items.map(g => (
+                    <tr key={g.id}>
+                      <td>
+                        <button className="btn btn-sm btn-outline-dark" onClick={() => openDetail(g)}>
+                          Ver detalle
+                        </button>
+                      </td>
+                      <td>{g.servicio || "—"}</td>
+                      <td className="text-muted">{GF.monthLabel(g.periodo)}</td>
+                      <td>{GF.fmtDate(g.vence)}</td>
+                      <td>
+                        <div className="fw-semibold">{g.proveedor || "—"}</div>
+                        {g.descripcion ? <div className="text-muted small">{g.descripcion}</div> : null}
+                      </td>
+                      <td className="text-end fw-semibold">{GF.money(g.totalFactura)}</td>
+                      <td className="text-end">{GF.money(g.aportado)}</td>
+                      <td className="text-end">{GF.money(g.pendiente)}</td>
+                      <td><EstadoBadge estado={g.estado} /></td>
+                      <td className="text-end">
+                        <div className="btn-group btn-group-sm" role="group">
+                          <button className="btn btn-outline-secondary" onClick={() => openEdit(g)} title="Editar">
+                            <i className="bi bi-pencil"></i>
+                          </button>
+                          <button className="btn btn-outline-secondary" onClick={() => deleteGasto(g.id)} title="Eliminar">
+                            <i className="bi bi-trash"></i>
+                          </button>
+                          <button className="btn btn-outline-success" onClick={() => markAllPaid(g.id)} title="Marcar como pagado">
+                            <i className="bi bi-check2-circle"></i>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Mobile cards */}
+        <div className="d-lg-none mt-3">
+          {(computed.items || []).length === 0 ? (
+            <div className="wbs-card p-4 text-center text-muted">
+              {loading ? "Cargando..." : "Sin registros con estos filtros."}
+            </div>
+          ) : (
+            <div className="d-grid gap-2">
+              {computed.items.map(g => (
+                <div className="wbs-card p-3" key={g.id}>
+                  <div className="d-flex justify-content-between gap-2">
+                    <div>
+                      <div className="fw-bold">{g.servicio || "—"}</div>
+                      <div className="text-muted small">{g.proveedor || "—"}</div>
+                    </div>
+                    <EstadoBadge estado={g.estado} />
+                  </div>
+
+                  <div className="row g-2 mt-2">
+                    <div className="col-6">
+                      <div className="text-muted small">Vence</div>
+                      <div className="fw-semibold">{GF.fmtDate(g.vence)}</div>
+                    </div>
+                    <div className="col-6 text-end">
+                      <div className="text-muted small">Total</div>
+                      <div className="fw-semibold">{GF.money(g.totalFactura)}</div>
+                    </div>
+                    <div className="col-6">
+                      <div className="text-muted small">Aportado</div>
+                      <div>{GF.money(g.aportado)}</div>
+                    </div>
+                    <div className="col-6 text-end">
+                      <div className="text-muted small">Pendiente</div>
+                      <div>{GF.money(g.pendiente)}</div>
+                    </div>
+                  </div>
+
+                  <div className="d-flex gap-2 mt-3">
+                    <button className="btn btn-outline-dark btn-sm flex-fill" onClick={() => openDetail(g)}>
+                      Ver detalle
+                    </button>
+                    <button className="btn btn-outline-secondary btn-sm" onClick={() => openEdit(g)} title="Editar">
+                      <i className="bi bi-pencil"></i>
+                    </button>
+                    <button className="btn btn-outline-secondary btn-sm" onClick={() => deleteGasto(g.id)} title="Eliminar">
+                      <i className="bi bi-trash"></i>
+                    </button>
+                    <button className="btn btn-outline-success btn-sm" onClick={() => markAllPaid(g.id)} title="Pagado">
+                      <i className="bi bi-check2-circle"></i>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Modal: Nuevo/Editar */}
+        <div className="modal fade" id="gfModalForm" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-lg modal-dialog-scrollable">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">{formMode === "edit" ? "Editar gasto fijo" : "Nuevo gasto fijo"}</h5>
+                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+
+              <form onSubmit={saveForm}>
+                <div className="modal-body">
+                  <div className="row g-2">
+                    <div className="col-12 col-md-4">
+                      <label className="form-label">Servicio <span className="text-danger">*</span></label>
+                      <select
+                        className="form-select"
+                        value={form.servicio}
+                        onChange={(e) => setForm(f => ({ ...f, servicio: e.target.value }))}
+                      >
+                        <option value="">Selecciona…</option>
+                        {servicios.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="col-6 col-md-3">
+                      <label className="form-label">Periodo <span className="text-danger">*</span></label>
+                      <select
+                        className="form-select"
+                        value={form.periodo}
+                        onChange={(e) => setForm(f => ({ ...f, periodo: e.target.value }))}
+                      >
+                        {periodOptions.map(p => <option key={p} value={p}>{GF.monthLabel(p)}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="col-6 col-md-5">
+                      <label className="form-label">Vence</label>
+                      <input
+                        type="date"
+                        className="form-control"
+                        value={form.vence}
+                        onChange={(e) => setForm(f => ({ ...f, vence: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Proveedor <span className="text-danger">*</span></label>
+                      <input
+                        className="form-control"
+                        placeholder="Ej. ENEE / Claro / Cablecolor"
+                        value={form.proveedor}
+                        onChange={(e) => setForm(f => ({ ...f, proveedor: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Total factura <span className="text-danger">*</span></label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="form-control"
+                        value={form.totalFactura}
+                        onChange={(e) => setForm(f => ({ ...f, totalFactura: e.target.value }))}
+                      />
+                      <div className="text-muted small mt-1">Total: {GF.money(formTotals.total)} • Aportes: {GF.money(formTotals.suma)} • Pendiente por asignar: {GF.money(formTotals.pendiente)}</div>
+                    </div>
+
+                    <div className="col-12">
+                      <label className="form-label">Descripción</label>
+                      <textarea
+                        className="form-control"
+                        rows="2"
+                        placeholder="Opcional: número de factura, notas, etc."
+                        value={form.descripcion}
+                        onChange={(e) => setForm(f => ({ ...f, descripcion: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  <hr className="my-4" />
+
+                  <div className="d-flex justify-content-between align-items-center">
+                    <div>
+                      <div className="fw-bold">Reparto de aportes</div>
+                      <div className="text-muted small">Agrega quién aportará y el monto exacto. (Opcional)</div>
+                    </div>
+                    <button type="button" className="btn btn-outline-dark btn-sm" onClick={addAporteRow}>
+                      <i className="bi bi-plus-lg me-2"></i>Agregar persona
+                    </button>
+                  </div>
+
+                  {(form.aportes || []).length === 0 ? (
+                    <div className="text-muted mt-3">Aún no has agregado aportes.</div>
+                  ) : (
+                    <div className="table-responsive mt-3">
+                      <table className="table table-sm align-middle">
+                        <thead>
+                          <tr>
+                            <th>Persona</th>
+                            <th style={{width: 160}} className="text-end">Monto</th>
+                            <th style={{width: 110}} className="text-center">Pagado</th>
+                            <th style={{width: 60}}></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(form.aportes || []).map((a, idx) => (
+                            <tr key={idx}>
+                              <td>
+                                <select
+                                  className="form-select form-select-sm"
+                                  value={a.personaId}
+                                  onChange={(e) => {
+                                    const personaId = e.target.value;
+                                    const found = (aportantes || []).find(p => String(p.id) === String(personaId));
+                                    setForm(f => {
+                                      const next = [...(f.aportes || [])];
+                                      next[idx] = { ...next[idx], personaId, personaNombre: found?.nombreCompleto || found?.nombre_usuario || "" };
+                                      return { ...f, aportes: next };
+                                    });
+                                  }}
+                                >
+                                  <option value="">Selecciona…</option>
+                                  {(aportantes || []).map(p => (
+                                    <option key={p.id || p.nombre_usuario} value={p.id}>{p.nombreCompleto || p.nombre_usuario}</option>
+                                  ))}
+                                </select>
+                                {/* Fallback: si no selecciona persona, permite escribir nombre */}
+                                {!a.personaId ? (
+                                  <input
+                                    className="form-control form-control-sm mt-2"
+                                    placeholder="Nombre de la persona"
+                                    value={a.personaNombre}
+                                    onChange={(e) => setForm(f => {
+                                      const next = [...(f.aportes || [])];
+                                      next[idx] = { ...next[idx], personaNombre: e.target.value };
+                                      return { ...f, aportes: next };
+                                    })}
+                                  />
+                                ) : null}
+                              </td>
+                              <td className="text-end">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  className="form-control form-control-sm text-end"
+                                  value={a.monto}
+                                  onChange={(e) => setForm(f => {
+                                    const next = [...(f.aportes || [])];
+                                    next[idx] = { ...next[idx], monto: e.target.value };
+                                    return { ...f, aportes: next };
+                                  })}
+                                />
+                              </td>
+                              <td className="text-center">
+                                <div className="form-check form-switch d-flex justify-content-center">
+                                  <input
+                                    className="form-check-input"
+                                    type="checkbox"
+                                    checked={!!a.pagado}
+                                    onChange={(e) => setForm(f => {
+                                      const next = [...(f.aportes || [])];
+                                      next[idx] = { ...next[idx], pagado: e.target.checked };
+                                      return { ...f, aportes: next };
+                                    })}
+                                  />
+                                </div>
+                              </td>
+                              <td className="text-end">
+                                <button type="button" className="btn btn-link text-danger" onClick={() => removeAporteRow(idx)} title="Quitar">
+                                  <i className="bi bi-x-lg"></i>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                  <button type="submit" className="btn btn-gold" disabled={saving}>
+                    {saving ? <SpinnerInline label="Guardando..." /> : "Guardar"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        {/* Modal: Detalle */}
+        <div className="modal fade" id="gfModalDetail" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-lg modal-dialog-scrollable">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Detalle del gasto</h5>
+                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div className="modal-body">
+                {!activeGasto ? (
+                  <div className="text-muted">Selecciona un gasto para ver el detalle.</div>
+                ) : (
+                  <>
+                    <div className="d-flex flex-wrap justify-content-between gap-2">
+                      <div>
+                        <div className="fw-bold">{activeGasto.servicio}</div>
+                        <div className="text-muted small">{GF.monthLabel(activeGasto.periodo)} • Vence {GF.fmtDate(activeGasto.vence)}</div>
+                        <div className="mt-1">Proveedor: <span className="fw-semibold">{activeGasto.proveedor || "—"}</span></div>
+                        {activeGasto.descripcion ? <div className="text-muted small">{activeGasto.descripcion}</div> : null}
+                      </div>
+                      <div className="text-end">
+                        <EstadoBadge estado={activeGasto.estado} />
+                        <div className="mt-2">
+                          <div className="text-muted small">Total</div>
+                          <div className="fw-bold">{GF.money(activeGasto.totalFactura)}</div>
+                        </div>
+                        <div className="mt-1">
+                          <div className="text-muted small">Pendiente</div>
+                          <div className="fw-semibold">{GF.money(activeGasto.pendiente)}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <hr className="my-3" />
+
+                    <div className="d-flex justify-content-between align-items-center">
+                      <div>
+                        <div className="fw-bold">Aportes</div>
+                        <div className="text-muted small">Marca como pagado cada aporte cuando se reciba.</div>
+                      </div>
+                      <div className="d-flex gap-2">
+                        <button className="btn btn-outline-secondary btn-sm" onClick={() => openEdit(activeGasto)}>
+                          <i className="bi bi-pencil me-2"></i>Editar
+                        </button>
+                        <button className="btn btn-outline-success btn-sm" onClick={() => markAllPaid(activeGasto.id)}>
+                          <i className="bi bi-check2-circle me-2"></i>Marcar todo pagado
+                        </button>
+                      </div>
+                    </div>
+
+                    {(activeGasto.aportes || []).length === 0 ? (
+                      <div className="text-muted mt-3">Este gasto aún no tiene aportes asignados.</div>
+                    ) : (
+                      <div className="table-responsive mt-3">
+                        <table className="table table-sm align-middle">
+                          <thead>
+                            <tr>
+                              <th>Persona</th>
+                              <th className="text-end" style={{width: 160}}>Monto</th>
+                              <th className="text-center" style={{width: 140}}>Pagado</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {activeGasto.aportes.map(a => (
+                              <tr key={a.id || (a.personaId + a.personaNombre)}>
+                                <td>{a.personaNombre || "—"}</td>
+                                <td className="text-end">{GF.money(a.monto)}</td>
+                                <td className="text-center">
+                                  <div className="form-check form-switch d-flex justify-content-center">
+                                    <input
+                                      className="form-check-input"
+                                      type="checkbox"
+                                      checked={!!a.pagado}
+                                      onChange={(e) => toggleAportePagado(a.id, e.target.checked)}
+                                    />
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+</script>
