@@ -1,13 +1,539 @@
 <script type="text/babel">
-  /**
-   * View: Préstamos / Otorgar
-   * Por ahora: placeholder.
-   */
+  const { useState, useEffect, useMemo, useRef } = React;
+
+  // --- HELPERS DE FORMATO ---
+  const money = (n) => {
+    const val = Number(n || 0);
+    return new Intl.NumberFormat('es-HN', { style: 'currency', currency: 'HNL' }).format(val);
+  };
+
+  const formatDate = (iso) => {
+    if (!iso) return "—";
+    // Asume YYYY-MM-DD
+    const [y, m, d] = iso.split("-");
+    return `${d}/${m}/${y}`;
+  };
+
+  // --- COMPONENTES UI ---
+
+  function StatusBadge({ status }) {
+    const map = {
+      "Activo": "bg-primary",
+      "Finalizado": "bg-success",
+      "Vencido": "bg-danger",
+      "Borrador": "bg-secondary",
+      "Cancelado": "bg-dark"
+    };
+    // Lógica para detectar vencido en UI si el backend no lo manda explícito en 'estado'
+    const cls = map[status] || "bg-secondary";
+    return <span className={`badge rounded-pill ${cls}`}>{status}</span>;
+  }
+
+  function Modal({ id, title, size = "modal-md", children, onClose }) {
+    return (
+      <div className="modal fade" id={id} tabIndex="-1" aria-hidden="true">
+        <div className={`modal-dialog modal-dialog-centered modal-dialog-scrollable ${size}`}>
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title fw-bold">{title}</h5>
+              <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close" onClick={onClose}></button>
+            </div>
+            <div className="modal-body">
+              {children}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- VISTA PRINCIPAL ---
+
   function PrestamosOtorgarView({ user }) {
+    // Datos
+    const [loans, setLoans] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [clients, setClients] = useState([]); 
+    
+    // Stats calculados en cliente
+    const stats = useMemo(() => {
+      let activos = 0, insoluto = 0, vencido = 0, prox = 0;
+      loans.forEach(l => {
+        if (l.estado === "Activo") {
+          activos++;
+          insoluto += Number(l.saldoInsoluto || 0);
+          vencido += Number(l.montoVencido || 0);
+          // Si hay próxima cuota definida
+          if (l.proximaCuotaMonto > 0) prox++;
+        }
+      });
+      return { activos, insoluto, vencido, prox };
+    }, [loans]);
+
+    // Modales y Selección
+    const [selLoan, setSelLoan] = useState(null); // Préstamo seleccionado (resumen de lista)
+    const [detail, setDetail] = useState(null);   // Detalle completo traído del backend
+    
+    // Formulario Nuevo
+    const [newForm, setNewForm] = useState({
+      idPersona: "", 
+      montoPrincipal: "", 
+      tasaMensual: 5, 
+      plazoMeses: 12, 
+      diaPago: 1,
+      fechaDesembolso: new Date().toISOString().slice(0,10)
+    });
+
+    // Formulario Pago
+    const [payForm, setPayForm] = useState({
+      mode: "PROXIMA_CUOTA", // PROXIMA_CUOTA | MONTO_LIBRE | LIQUIDAR_HOY
+      amount: 0,
+      date: new Date().toISOString().slice(0,10),
+      notes: "",
+      preview: null // Para mostrar desglose antes de confirmar
+    });
+    const [payLoading, setPayLoading] = useState(false);
+
+    // --- CARGA INICIAL ---
+    useEffect(() => {
+      loadLoans();
+      loadClients();
+    }, []);
+
+    const loadLoans = async () => {
+      setLoading(true);
+      try {
+        // Traemos todos los activos/finalizados
+        const res = await gasCall("listarPrestamos", { estado: "" }); 
+        if (Array.isArray(res)) {
+          setLoans(res);
+        }
+      } catch (e) { console.error(e); }
+      setLoading(false);
+    };
+
+    const loadClients = async () => {
+      try {
+        const res = await gasCall("listarPersonasActivas");
+        // Normalizar estructura si viene diferente
+        const list = (Array.isArray(res) ? res : []).map(p => ({
+          id: p.id_persona || p.id,
+          nombre: p.nombre_persona || p.nombre
+        }));
+        setClients(list);
+      } catch (e) {}
+    };
+
+    // --- FUNCIONES DETALLE ---
+    const openDetail = async (loan) => {
+      setSelLoan(loan);
+      setDetail(null);
+      // Abrir modal inmediatamente
+      const modalEl = document.getElementById('modalDetail');
+      if(window.bootstrap) {
+        const modal = new window.bootstrap.Modal(modalEl);
+        modal.show();
+      }
+      
+      // Cargar info full
+      try {
+        const res = await gasCall("obtenerDetallePrestamo", loan.idPrestamo);
+        setDetail(res);
+      } catch(e) { alert("Error cargando detalle"); }
+    };
+
+    // --- FUNCIONES NUEVO PRÉSTAMO ---
+    const handleCreate = async () => {
+      if(!newForm.idPersona || !newForm.montoPrincipal) return alert("Faltan datos obligatorios.");
+      setLoading(true);
+      try {
+        await gasCall("guardarPrestamo", {
+          ...newForm,
+          origen: "OTORGADO",
+          estado: "Activo", // Crear directamente activo
+          creadoPor: user.nombre_usuario
+        });
+        
+        // Cerrar modal
+        const el = document.getElementById('modalNew');
+        const modal = window.bootstrap.Modal.getInstance(el);
+        modal.hide();
+        
+        loadLoans();
+      } catch(e) { alert("Error: " + e); }
+      setLoading(false);
+    };
+
+    // --- FUNCIONES PAGO ---
+    const openPayModal = async (mode) => {
+      if (!selLoan) return;
+      
+      setPayLoading(true);
+      setPayForm(prev => ({ ...prev, mode, amount: 0, preview: null }));
+      
+      // Abrir modal pago
+      const modalEl = document.getElementById('modalPay');
+      if(window.bootstrap) {
+        const modal = new window.bootstrap.Modal(modalEl);
+        modal.show();
+      }
+
+      // Obtener sugerencia del backend
+      try {
+        const res = await gasCall("getPagoSugerido", {
+          idPrestamo: selLoan.idPrestamo,
+          modo: mode,
+          fechaPago: payForm.date
+        });
+        
+        if (res.ok) {
+          setPayForm(prev => ({
+            ...prev,
+            amount: res.montoSugerido,
+            preview: res.preview
+          }));
+        }
+      } catch(e) { console.error(e); }
+      setPayLoading(false);
+    };
+
+    // Recalcular preview cuando cambia monto manual
+    const handlePayAmountChange = async (val) => {
+      const newAmount = val;
+      setPayForm(prev => ({ ...prev, amount: newAmount }));
+      
+      // Debounce simple o llamada directa si no es muy frecuente
+      try {
+        const res = await gasCall("getPagoSugerido", {
+          idPrestamo: selLoan.idPrestamo,
+          modo: "MONTO_LIBRE",
+          monto: newAmount,
+          fechaPago: payForm.date
+        });
+        if (res.ok) {
+          setPayForm(prev => ({ ...prev, preview: res.preview }));
+        }
+      } catch(e) {}
+    };
+
+    const handleConfirmPay = async () => {
+      if (payForm.amount <= 0) return alert("Monto debe ser mayor a 0");
+      setPayLoading(true);
+      try {
+        await gasCall("registrarPagoPrestamo", {
+          idPrestamo: selLoan.idPrestamo,
+          monto: payForm.amount,
+          fechaHora: new Date().toISOString(), // Fecha real transacción
+          metodo: "Efectivo", // TODO: Selector
+          nota: payForm.notes
+        });
+        
+        // Cerrar modal pago
+        const el = document.getElementById('modalPay');
+        const modal = window.bootstrap.Modal.getInstance(el);
+        modal.hide();
+
+        // Recargar detalle y lista
+        const res = await gasCall("obtenerDetallePrestamo", selLoan.idPrestamo);
+        setDetail(res);
+        loadLoans();
+        
+      } catch(e) { alert("Error al pagar: " + e); }
+      setPayLoading(false);
+    };
+
+    // --- IMPRESIÓN ---
+    const printFicha = () => {
+      window.print();
+    };
+
     return (
       <div className="wbs-page">
-        <h2 className="wbs-page-title mb-0">Otorgar Préstamo</h2>
-        <div className="text-muted mt-2">Bienvenido a otorgar un prestamo.</div>
+        {/* HEADER */}
+        <div className="d-flex justify-content-between align-items-center mb-3">
+          <div>
+            <h2 className="wbs-page-title m-0">Otorgar Préstamos</h2>
+            <div className="text-muted small">Cartera de créditos</div>
+          </div>
+          <button className="btn btn-gold" data-bs-toggle="modal" data-bs-target="#modalNew">
+            <i className="bi bi-plus-lg me-1"></i> Nuevo Préstamo
+          </button>
+        </div>
+
+        {/* CARDS */}
+        <div className="row g-3 mb-4">
+          <div className="col-6 col-md-3">
+            <div className="wbs-stat soft-green">
+              <div className="label">Activos</div>
+              <div className="value">{stats.activos}</div>
+            </div>
+          </div>
+          <div className="col-6 col-md-3">
+            <div className="wbs-stat soft-yellow">
+              <div className="label">Saldo Insoluto</div>
+              <div className="value fs-6">{money(stats.insoluto)}</div>
+            </div>
+          </div>
+          <div className="col-6 col-md-3">
+            <div className="wbs-stat soft-purple">
+              <div className="label">Por Cobrar</div>
+              <div className="value fs-6">{money(stats.insoluto + stats.vencido)}</div>
+            </div>
+          </div>
+          <div className="col-6 col-md-3">
+            <div className="wbs-stat text-bg-danger bg-opacity-10">
+              <div className="label text-danger fw-bold">Mora / Vencido</div>
+              <div className="value text-danger">{money(stats.vencido)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* TABLA */}
+        <div className="wbs-card">
+          <div className="table-responsive">
+            <table className="table wbs-table align-middle">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Próxima Cuota</th>
+                  <th>Vencido</th>
+                  <th>Total Deuda</th>
+                  <th>Estado</th>
+                  <th className="text-end"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && loans.length === 0 && <tr><td colSpan="6" className="text-center p-4">Cargando...</td></tr>}
+                {loans.map(l => (
+                  <tr key={l.idPrestamo} className={l.montoVencido > 0 ? "table-danger bg-opacity-10" : ""}>
+                    <td>
+                      <div className="fw-bold">{l.personaNombre}</div>
+                      <div className="small text-muted">{money(l.montoPrincipal)} • {l.plazoMeses} meses</div>
+                    </td>
+                    <td>
+                      <div>{formatDate(l.proximaCuotaFecha)}</div>
+                      <div className="small text-muted">{money(l.proximaCuotaMonto)}</div>
+                    </td>
+                    <td className={l.montoVencido > 0 ? "text-danger fw-bold" : "text-muted"}>
+                      {money(l.montoVencido)}
+                    </td>
+                    <td className="fw-bold">{money(l.totalPendiente)}</td>
+                    <td><StatusBadge status={l.estado} /></td>
+                    <td className="text-end">
+                      <button className="btn btn-sm btn-outline-dark" onClick={() => openDetail(l)}>
+                        Gestionar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* --- MODAL NUEVO --- */}
+        <Modal id="modalNew" title="Nuevo Préstamo">
+          <div className="mb-3">
+            <label className="form-label">Cliente</label>
+            <select className="form-select" value={newForm.idPersona} onChange={e => setNewForm({...newForm, idPersona: e.target.value})}>
+              <option value="">Seleccionar...</option>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select>
+          </div>
+          <div className="row g-2 mb-3">
+            <div className="col-6">
+              <label className="form-label">Monto (L)</label>
+              <input type="number" className="form-control" value={newForm.montoPrincipal} onChange={e => setNewForm({...newForm, montoPrincipal: e.target.value})}/>
+            </div>
+            <div className="col-6">
+              <label className="form-label">Tasa Mensual (%)</label>
+              <input type="number" className="form-control" value={newForm.tasaMensual} onChange={e => setNewForm({...newForm, tasaMensual: e.target.value})}/>
+            </div>
+          </div>
+          <div className="row g-2 mb-3">
+            <div className="col-4">
+              <label className="form-label">Plazo (meses)</label>
+              <input type="number" className="form-control" value={newForm.plazoMeses} onChange={e => setNewForm({...newForm, plazoMeses: e.target.value})}/>
+            </div>
+            <div className="col-4">
+              <label className="form-label">Día Pago</label>
+              <input type="number" className="form-control" value={newForm.diaPago} onChange={e => setNewForm({...newForm, diaPago: e.target.value})}/>
+            </div>
+            <div className="col-4">
+              <label className="form-label">Desembolso</label>
+              <input type="date" className="form-control" value={newForm.fechaDesembolso} onChange={e => setNewForm({...newForm, fechaDesembolso: e.target.value})}/>
+            </div>
+          </div>
+          <div className="d-grid">
+            <button className="btn btn-gold" onClick={handleCreate} disabled={loading}>
+              {loading ? "Procesando..." : "Crear y Desembolsar"}
+            </button>
+          </div>
+        </Modal>
+
+        {/* --- MODAL DETALLE (FICHA) --- */}
+        <div className="modal fade" id="modalDetail" tabIndex="-1" aria-hidden="true">
+          <div className="modal-dialog modal-xl modal-dialog-scrollable">
+            <div className="modal-content">
+              <div className="modal-header d-print-none">
+                <h5 className="modal-title fw-bold">Ficha de Préstamo</h5>
+                <div>
+                  <button className="btn btn-outline-secondary me-2" onClick={printFicha}><i className="bi bi-printer"></i></button>
+                  <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+              </div>
+              <div className="modal-body print-section">
+                {selLoan && (
+                  <>
+                    {/* Header Ficha */}
+                    <div className="row mb-4 border-bottom pb-3">
+                      <div className="col-md-6">
+                        <h3 className="mb-0">{selLoan.personaNombre}</h3>
+                        <div className="text-muted">Crédito #{selLoan.idPrestamo.slice(0,8)}</div>
+                      </div>
+                      <div className="col-md-6 text-md-end">
+                        <div className="display-6 fw-bold text-success">
+                          {money(detail ? detail.resumen?.totalPendiente : selLoan.totalPendiente)}
+                        </div>
+                        <small className="text-muted text-uppercase fw-bold">Deuda Total Actual</small>
+                      </div>
+                    </div>
+
+                    {/* Acciones (No print) */}
+                    <div className="d-print-none d-flex gap-2 mb-4 p-3 bg-light rounded align-items-center">
+                      <div className="flex-grow-1">
+                        <div className="small fw-bold text-muted">ACCIONES RÁPIDAS</div>
+                      </div>
+                      <button className="btn btn-success" onClick={() => openPayModal("PROXIMA_CUOTA")}>
+                        <i className="bi bi-cash-coin me-2"></i>Pagar Próxima
+                      </button>
+                      <button className="btn btn-outline-dark" onClick={() => openPayModal("MONTO_LIBRE")}>
+                        <i className="bi bi-pencil-square me-2"></i>Abono Libre
+                      </button>
+                      <button className="btn btn-outline-danger" onClick={() => openPayModal("LIQUIDAR_HOY")}>
+                        <i className="bi bi-check-circle me-2"></i>Liquidar Total
+                      </button>
+                    </div>
+
+                    {/* Contenido Tabs */}
+                    <ul className="nav nav-tabs mb-3 d-print-none">
+                      <li className="nav-item"><button className="nav-link active">Amortización</button></li>
+                      <li className="nav-item"><button className="nav-link">Pagos</button></li>
+                    </ul>
+
+                    {/* Tabla Cuotas */}
+                    <div className="table-responsive">
+                      <table className="table table-sm table-striped border">
+                        <thead className="table-light">
+                          <tr>
+                            <th>#</th>
+                            <th>Vence</th>
+                            <th className="text-end">Cuota</th>
+                            <th className="text-end">Mora Acum.</th>
+                            <th className="text-end">Pagado</th>
+                            <th className="text-end">Pendiente</th>
+                            <th className="text-center">Estado</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {!detail ? <tr><td colSpan="7" className="text-center p-3">Cargando detalle...</td></tr> : 
+                           detail.cuotas.map(c => (
+                            <tr key={c.idCuota}>
+                              <td>{c.nroCuota}</td>
+                              <td>{formatDate(c.fechaPago)}</td>
+                              <td className="text-end">{money(c.cuota)}</td>
+                              <td className="text-end text-danger">{c.moraAcumulada > 0 ? money(c.moraAcumulada) : "-"}</td>
+                              <td className="text-end text-success fw-bold">{c.interesPagado + c.capitalPagado + c.moraPagada > 0 ? money(c.interesPagado + c.capitalPagado + c.moraPagada) : "-"}</td>
+                              <td className="text-end fw-bold">{money(c.totalPendiente)}</td>
+                              <td className="text-center">
+                                {c.estado === "Pagada" 
+                                  ? <i className="bi bi-check-circle-fill text-success"></i> 
+                                  : (c.estado === "Vencida" 
+                                      ? <span className="badge bg-danger">Vencida</span> 
+                                      : <span className="badge bg-secondary">Pendiente</span>)
+                                }
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* --- MODAL PAGO --- */}
+        <Modal id="modalPay" title="Registrar Pago" size="modal-md">
+          <div className="mb-3 text-center">
+            <div className="text-muted small mb-1">Monto a Pagar</div>
+            <div className="input-group input-group-lg">
+              <span className="input-group-text bg-transparent border-0 fw-bold">L.</span>
+              <input 
+                type="number" 
+                className="form-control text-center fw-bold fs-2 border-0" 
+                value={payForm.amount} 
+                onChange={(e) => handlePayAmountChange(e.target.value)}
+              />
+            </div>
+            <div className="border-bottom w-50 mx-auto"></div>
+          </div>
+
+          {payForm.preview && (
+            <div className="alert alert-light border mb-3 small">
+              <div className="fw-bold mb-2"><i className="bi bi-info-circle me-1"></i> Se aplicará así:</div>
+              <div className="d-flex justify-content-between text-danger">
+                <span>1. Mora:</span>
+                <span>{money(payForm.preview.moratorioCobrado)}</span>
+              </div>
+              <div className="d-flex justify-content-between">
+                <span>2. Interés:</span>
+                <span>{money(payForm.preview.interesCobrado)}</span>
+              </div>
+              <div className="d-flex justify-content-between text-success fw-bold">
+                <span>3. Capital:</span>
+                <span>{money(payForm.preview.capitalCobrado)}</span>
+              </div>
+              {payForm.preview.saldoFavor > 0 && (
+                <div className="d-flex justify-content-between text-primary mt-1 pt-1 border-top">
+                  <span>Saldo a Favor (sobrante):</span>
+                  <span>{money(payForm.preview.saldoFavor)}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mb-3">
+            <label className="form-label small text-muted">Nota / Referencia</label>
+            <input 
+              className="form-control" 
+              placeholder="Ej. Transferencia #1234" 
+              value={payForm.notes} 
+              onChange={e => setPayForm({...payForm, notes: e.target.value})}
+            />
+          </div>
+
+          <div className="d-grid">
+            <button className="btn btn-success btn-lg" onClick={handleConfirmPay} disabled={payLoading}>
+              {payLoading ? "Procesando..." : "Confirmar Pago"}
+            </button>
+          </div>
+        </Modal>
+
+        {/* Estilos Print */}
+        <style>
+        {`
+          @media print {
+            body * { visibility: hidden; }
+            .print-section, .print-section * { visibility: visible; }
+            .print-section { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 20px; }
+            .d-print-none { display: none !important; }
+            .modal-content { border: none !important; box-shadow: none !important; }
+          }
+        `}
+        </style>
       </div>
     );
   }
