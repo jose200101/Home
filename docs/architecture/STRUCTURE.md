@@ -26,12 +26,13 @@ Los nombres de salida preservan temporalmente las llamadas `HtmlService.createTe
 
 ## Despliegue aislado
 
-1. Crear un proyecto Apps Script de pruebas **distinto del real** y una copia de Spreadsheet.
-2. Verificar `SPREADSHEET_ID` en Script Properties del proyecto de pruebas y que no apunte a datos productivos.
-3. Ejecutar `npm test` y `npm run build`.
-4. Revisar `clasp status` y el destino activo; no ejecutar `clasp push` sobre el script real.
-5. Validar en el entorno de pruebas el uso de nombres con subcarpetas, las inclusiones HTML y los RPC.
-6. Solo después de aprobación explícita planificar el despliegue.
+1. Copiar `.clasp.example.json` a un archivo local `.clasp.json` (ignorado por Git). **El archivo publicado en Git no contiene un script ID activo.**
+2. Crear un proyecto Apps Script de pruebas **distinto del real** y una copia de Spreadsheet.
+3. Verificar `SPREADSHEET_ID` en Script Properties del proyecto de pruebas y que no apunte a datos productivos.
+4. Ejecutar `npm test`, `npm run smoke` y `npm run build`.
+5. Establecer `HOME_QA_SCRIPT_ID` con el ID verificado del script QA; ejecutar `npm run qa:preflight` y revisar `clasp status`. **Nunca ejecutar `clasp push` sobre el script real.**
+6. Validar en el entorno de pruebas el uso de nombres con subcarpetas, las inclusiones HTML y los RPC.
+7. Solo después de aprobación explícita planificar el despliegue.
 
 `dist/` no se versiona. Nunca editarla manualmente.
 

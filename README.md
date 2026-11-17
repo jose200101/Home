@@ -16,6 +16,7 @@ Requiere Node.js 20 o posterior.
 npm test
 npm run preview
 npm run build
+npm run smoke
 ```
 
 `npm test` construye `dist/` y ejecuta las pruebas existentes más las pruebas de estructura. `npm run preview` construye `dist/` y sirve una demostración local con datos **ficticios**, sin conexión a Google. `npm run build` copia fuentes a `dist/` conservando exactamente los nombres de archivos del proyecto Apps Script vigente.
@@ -33,6 +34,17 @@ npm run build
 - `docs/legacy/`: documentación anterior conservada como referencia histórica.
 
 Revisar [Arquitectura y despliegue](docs/architecture/STRUCTURE.md), [Transición de datos](docs/migration/PLAN-DATOS.md) y [Mapa de pantallas](docs/ux-ui/MAP.md).
+
+## Entorno QA (configuración local, nunca desplegar por defecto)
+
+El repositorio ya no versiona `.clasp.json` con el identificador del script existente.
+```bash
+cp .clasp.example.json .clasp.json
+# Sustituir REEMPLAZAR_CON_SCRIPT_ID_QA por el ID de un script QA independiente
+npm run build
+HOME_QA_SCRIPT_ID="ID_VERIFICADO_DEL_SCRIPT_QA" npm run qa:preflight
+```
+Luego comprobar manualmente `clasp status` y confirmar la Script Property `SPREADSHEET_ID` de **una copia de QA**. No realizar `clasp push` hasta comprobar que tanto el script como la hoja sean distintos de producción. En PowerShell, establecer `$env:HOME_QA_SCRIPT_ID` antes de ejecutar `npm run qa:preflight`.
 
 ## Precauciones
 

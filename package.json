@@ -5,6 +5,7 @@
     "build": "node tools/build.cjs",
     "test": "npm run build && node --test tests/*.test.cjs",
     "preview": "npm run build && node tools/preview.cjs",
-    "smoke": "npm run build && node tools/smoke.cjs"
+    "smoke": "npm run build && node tools/smoke.cjs",
+    "qa:preflight": "node tools/qa-preflight.cjs"
   }
 }

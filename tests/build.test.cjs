@@ -14,8 +14,10 @@ test("build reproducible: cada fuente llega a dist sin modificaciones", () => {
 });
 
 test("clasp solo publica el directorio generado", () => {
-  const clasp = JSON.parse(read(".clasp.json").toString("utf8"));
+  const clasp = JSON.parse(read(".clasp.example.json").toString("utf8"));
   assert.equal(clasp.rootDir, "dist");
+  assert.equal(clasp.scriptId, "REEMPLAZAR_CON_SCRIPT_ID_QA");
+  assert.match(read(".gitignore").toString("utf8"), /^\.clasp\.json$/m);
   assert.equal(clasp.skipSubdirectories, false);
   assert.equal(JSON.parse(read("dist/appsscript.json").toString("utf8")).runtimeVersion, "V8");
 });
