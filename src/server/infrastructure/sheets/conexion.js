@@ -6,43 +6,16 @@
 function conexion_() {
   const id = String(env_().ID_DATABASE || "").trim();
 
-  if (id) {
+  if (!id) {
+    throw new Error("Configura SPREADSHEET_ID en Script Properties antes de conectar.");
+  }
   try {
     return SpreadsheetApp.openById(id);
   } catch (e) {
-    // Este error suele ocurrir cuando la WebApp está desplegada como
-    // "Ejecutar como: Usuario que accede" y la cuenta Google del navegador
-    // no tiene acceso al Spreadsheet (muy común en móviles con otra cuenta).
-    let eff = "";
-    let act = "";
-    try { eff = Session.getEffectiveUser().getEmail() || ""; } catch (_) {}
-    try { act = Session.getActiveUser().getEmail() || ""; } catch (_) {}
-
     throw new Error(
-      "No cuentas con el permiso necesario para acceder al documento solicitado. " +
-      "ID Spreadsheet: " + id + ". " +
-      "Cuenta (effective): " + (eff || "(no disponible)") + ", " +
-      "Cuenta (active): " + (act || "(no disponible)") + ". " +
-      "Solución: (1) Re-despliega la WebApp con 'Ejecutar como: Yo (propietario)' o " +
-      "(2) comparte el Spreadsheet con la cuenta Google que abre la WebApp."
+      "No se pudo abrir el Spreadsheet configurado. Verifica SPREADSHEET_ID y los permisos de la cuenta de ejecución. No se intentó otra conexión."
     );
   }
-}
-
-// Fallback: si el proyecto está vinculado al Spreadsheet (container-bound)
-  // y no configuraste ID_DATABASE/SPREADSHEET_ID.
-  try {
-    const active = SpreadsheetApp.getActiveSpreadsheet();
-    if (active) return active;
-  } catch (e) {
-    // ignoramos y lanzamos un error más claro abajo
-  }
-
-  throw new Error(
-    "No hay ID_DATABASE en env_(). " +
-    "Solución: (a) pega el ID en Backend/config/env.gs (ID_DATABASE), o " +
-    "(b) crea una Script Property SPREADSHEET_ID."
-  );
 }
 
 /**

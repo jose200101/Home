@@ -46,6 +46,12 @@ HOME_QA_SCRIPT_ID="ID_VERIFICADO_DEL_SCRIPT_QA" npm run qa:preflight
 ```
 Luego comprobar manualmente `clasp status` y confirmar la Script Property `SPREADSHEET_ID` de **una copia de QA**. No realizar `clasp push` hasta comprobar que tanto el script como la hoja sean distintos de producción. En PowerShell, establecer `$env:HOME_QA_SCRIPT_ID` antes de ejecutar `npm run qa:preflight`.
 
+El preflight rechaza expresamente el ID del Apps Script original, aunque coincida con la variable QA.
+La conexión exige `SPREADSHEET_ID` en Script Properties: sin un ID explícito, o si no se puede abrir,
+la operación falla. No hay fallback al Spreadsheet original, al documento activo ni a `CONFIG`.
+El preflight comprueba archivos locales; no verifica las propiedades remotas ni sustituye la revisión
+del ID de la hoja QA. Estos cambios deben validarse en un entorno QA independiente antes del merge.
+
 ## Precauciones
 
 No ejecutar `clasp push` sobre el script real ni migrar datos hasta validar primero una copia aislada de Apps Script y de Google Sheets. `main` debe permanecer sin cambios hasta revisar la rama y sus pruebas. No registrar credenciales ni IDs de usuarios en documentación o pruebas.

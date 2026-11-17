@@ -3,7 +3,7 @@
  * Tecnologías: Google Apps Script + HTML Service (Frontend con React + Bootstrap 5 + Babel)
  *
  * IMPORTANTE:
- *  - Configura SPREADSHEET_ID (o deja vacío si este script está "vinculado" al Spreadsheet).
+ *  - SPREADSHEET_ID es obligatorio en Script Properties del proyecto.
  *  - La hoja debe llamarse exactamente: USUARIOS
  *  - Encabezados esperados (fila 1): id, nombreCompleto, nombre_usuario, contrasenia, rol, estado
  *    (si cambias nombres, se ajusta automáticamente por encabezado).
@@ -11,9 +11,6 @@
 
 /** ==== CONFIG ==== */
 const CONFIG = {
-  // Pega aquí el ID del Spreadsheet (lo que está entre /d/ y /edit en la URL).
-  // Ejemplo: https://docs.google.com/spreadsheets/d/XXXXXXXXXXXX/edit
-  SPREADSHEET_ID: "",
   SHEET_NAME: "USUARIOS",
   HEADER_ROW: 1,
 
@@ -186,32 +183,8 @@ function _tokenKey_(token) {
 }
 
 function _getSpreadsheet_() {
-  // 0) Si existe conexion_() úsala (lee env_() / Script Properties / bound)
-  try {
-    if (typeof conexion_ === "function") return conexion_();
-  } catch (e) {
-    // seguimos con otros métodos
-  }
-
-  // 1) CONFIG (hardcode)
-  const cfgId = String(CONFIG.SPREADSHEET_ID || "").trim();
-  if (cfgId) return SpreadsheetApp.openById(cfgId);
-
-  // 2) Script Properties
-  const propId = String(PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID") || "").trim();
-  if (propId) return SpreadsheetApp.openById(propId);
-
-  // 3) Container-bound (si aplica)
-  try {
-    const active = SpreadsheetApp.getActiveSpreadsheet();
-    if (active) return active;
-  } catch (e) {}
-
-  throw new Error(
-    "No se pudo obtener el Spreadsheet. " +
-    "Solución: (a) define el ID en Backend/config/env.gs (ID_DATABASE), o (b) crea una Script Property SPREADSHEET_ID, " +
-    "o (c) define CONFIG.SPREADSHEET_ID."
-  );
+  // Una sola ruta: los errores de configuración o acceso detienen la operación.
+  return conexion_();
 }
 
 

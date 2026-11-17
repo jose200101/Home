@@ -3,6 +3,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const pathConfig = path.join(root, ".clasp.json");
+// Identificador no secreto: se conserva únicamente para impedir publicaciones QA al original.
+const originalScriptId = "1ZOHbILc2lIA9HTsi79gyB6EKlfuPLwhdGbasU0gJd6EruRLOlm-dnVwt";
 function fail(message) {
   console.error("QA_PREFLIGHT_FAIL: " + message);
   process.exitCode = 1;
@@ -13,9 +15,13 @@ if (!fs.existsSync(pathConfig)) {
   let config;
   try { config = JSON.parse(fs.readFileSync(pathConfig, "utf8")); }
   catch (_) { fail("Archivo .clasp.json no es JSON válido."); }
-  if (config) {
-    const expected = process.env.HOME_QA_SCRIPT_ID || "";
-    if (!expected || expected.length < 20) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    fail("La configuración debe ser un objeto JSON válido.");
+  } else {
+    const expected = String(process.env.HOME_QA_SCRIPT_ID || "").trim();
+    if (config.scriptId === originalScriptId || expected === originalScriptId) {
+      fail("El Apps Script original está prohibido como destino QA. Usar un proyecto independiente.");
+    } else if (!expected || expected.length < 20 || expected === "REEMPLAZAR_CON_SCRIPT_ID_QA") {
       fail("Configurar HOME_QA_SCRIPT_ID con el ID verificado del script QA.");
     } else if (config.scriptId !== expected) {
       fail("El scriptId de .clasp.json no coincide con HOME_QA_SCRIPT_ID.");
