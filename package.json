@@ -2,6 +2,7 @@
   "name": "home-cuentas",
   "private": true,
   "scripts": {
+    "check:deployment": "node tools/deployment-policy.cjs",
     "build": "node tools/build.cjs",
     "test": "npm run build && node --test tests/*.test.cjs",
     "preview": "npm run build && node tools/preview.cjs",

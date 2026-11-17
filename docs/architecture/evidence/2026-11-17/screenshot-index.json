@@ -1,0 +1,17 @@
+{
+  "storage": "Evidencia privada local; imágenes excluidas de Git por contener URLs de entorno.",
+  "screenshots": [
+    {
+      "file": "qa-settings.png",
+      "sha256": "44b918758b07597def8d7f608824175ba3bb22bdf4ab778e23f361f5e271f786"
+    },
+    {
+      "file": "runtime-pass.png",
+      "sha256": "34429cc4f0fb2300ae69d967a2859cd1b851be083b371aa4a35b247446c0503c"
+    },
+    {
+      "file": "qa-live-dashboard.png",
+      "sha256": "f5f7de4d0c58ec07488c99298c35bb9dd2810b0bb996684606c7f8a89aff49d4"
+    }
+  ]
+}

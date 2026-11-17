@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const manifest = require("./build-manifest.cjs");
+const { checkBaseManifest } = require("./deployment-policy.cjs");
 const root = path.resolve(__dirname, "..");
 const outputRoot = path.join(root, "dist");
 const seen = new Set();
@@ -25,7 +26,7 @@ for (const [source, destination] of manifest) {
   seen.add(destination);
 }
 
-const config = JSON.parse(fs.readFileSync(path.join(root, "src/gas/appsscript.json"), "utf8"));
+const config = checkBaseManifest();
 if (config.runtimeVersion !== "V8") throw new Error("Apps Script debe utilizar V8.");
 
 fs.rmSync(outputRoot, { recursive: true, force: true });
