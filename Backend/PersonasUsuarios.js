@@ -31,7 +31,7 @@ function _pickIdx_(idx, aliases) {
 }
 
 function _readSheetObjects_(sheetName) {
-  const sh = obtenerSheet(sheetName);
+  const sh = obtenerSheet_(sheetName);
   const lastRow = sh.getLastRow();
   const lastCol = sh.getLastColumn();
   if (lastRow < 2 || lastCol < 1) {
@@ -96,7 +96,7 @@ function _nextNumericId_(values, idIdx) {
 // PERSONAS
 // =====================
 
-function listarPersonas(params) {
+function listarPersonasLegacy_(params) {
   params = params || {};
   const env = (typeof env_ === "function") ? env_() : {};
   const sheetName = env.SH_PERSONAS || "PERSONAS";
@@ -142,12 +142,12 @@ function listarPersonas(params) {
   return out;
 }
 
-function listarPersonasActivas() {
-  const all = listarPersonas({ estado: "Activo" });
+function listarPersonasActivasLegacy_() {
+  const all = listarPersonasLegacy_({ estado: "Activo" });
   return (all || []).map(p => ({ id_persona: p.id_persona, nombre_persona: p.nombre_persona }));
 }
 
-function guardarPersona(data) {
+function guardarPersonaLegacy_(data) {
   data = data || {};
   // Nota: este proyecto es un WebApp (script independiente). En scripts NO vinculados
   // a un Spreadsheet/Doc, getDocumentLock() retorna null y provoca el error:
@@ -231,7 +231,7 @@ function guardarPersona(data) {
   }
 }
 
-function eliminarPersona(id_persona) {
+function eliminarPersonaLegacy_(id_persona) {
   const env = (typeof env_ === "function") ? env_() : {};
   const sheetName = env.SH_PERSONAS || "PERSONAS";
   const { sh, idx, values } = _readSheetObjects_(sheetName);
@@ -248,7 +248,7 @@ function eliminarPersona(id_persona) {
 // USUARIOS
 // =====================
 
-function listarUsuarios(params) {
+function listarUsuariosLegacy_(params) {
   params = params || {};
   const env = (typeof env_ === "function") ? env_() : {};
   const sheetName = env.SH_REGISTRO_USUARIOS || "USUARIOS";
@@ -290,7 +290,7 @@ function listarUsuarios(params) {
   return out;
 }
 
-function guardarUsuario(data) {
+function guardarUsuarioLegacy_(data) {
   data = data || {};
   // WebApp (script independiente): usar ScriptLock para evitar null en DocumentLock
   const lock = LockService.getScriptLock();
@@ -380,7 +380,7 @@ function guardarUsuario(data) {
   }
 }
 
-function eliminarUsuario(id) {
+function eliminarUsuarioLegacy_(id) {
   const env = (typeof env_ === "function") ? env_() : {};
   const sheetName = env.SH_REGISTRO_USUARIOS || "USUARIOS";
   const { sh, idx, values } = _readSheetObjects_(sheetName);

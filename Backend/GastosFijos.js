@@ -36,7 +36,7 @@ function _gfNowIso_() {
 }
 
 function _gfEnsureSheet_(name, headers) {
-  const ss = conexion();
+  const ss = conexion_();
   let sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
 
@@ -187,7 +187,7 @@ function _gfBool_(v) {
  * Devuelve una lista simple de personas aportantes (desde USUARIOS).
  * Nota: por ahora reutilizamos USUARIOS como "personas".
  */
-function listarUsuariosActivos() {
+function listarUsuariosActivosLegacy_() {
   const all = (typeof _readUsers_ === "function") ? _readUsers_() : [];
   return all
     .filter(u => {
@@ -205,20 +205,20 @@ function listarUsuariosActivos() {
  * Lista gastos fijos con aportes.
  * @param {{servicio?:string,periodo?:string,estado?:string,venceFrom?:string,venceTo?:string,personaId?:string,q?:string}} params
  */
-function listarGastosFijos(params) {
+function listarGastosFijosLegacy_(params) {
   params = params || {};
   const shName = _gfSheetName_("SH_GASTOS_FIJOS", "GASTOS_FIJOS");
   const detName = _gfSheetName_("SH_GASTOS_FIJOS_DETALLE", "DETALLE_GASTO_FIJO");
 
   let sh;
   try {
-    sh = obtenerSheet(shName);
+    sh = obtenerSheet_(shName);
   } catch (e) {
     return [];
   }
 
   let shDet = null;
-  try { shDet = obtenerSheet(detName); } catch (e) { shDet = null; }
+  try { shDet = obtenerSheet_(detName); } catch (e) { shDet = null; }
 
   const main = _gfRead_(sh);
   const det = shDet ? _gfRead_(shDet) : { headers: [], rows: [], idx: {} };
@@ -341,7 +341,7 @@ function listarGastosFijos(params) {
  * Crea o actualiza un gasto fijo.
  * @param {object} payload
  */
-function guardarGastoFijo(payload) {
+function guardarGastoFijoLegacy_(payload) {
   payload = payload || {};
   const shName = _gfSheetName_("SH_GASTOS_FIJOS", "GASTOS_FIJOS");
   const detName = _gfSheetName_("SH_GASTOS_FIJOS_DETALLE", "DETALLE_GASTO_FIJO");
@@ -483,7 +483,7 @@ function guardarGastoFijo(payload) {
   return { ok: true, id };
 }
 
-function eliminarGastoFijo(id) {
+function eliminarGastoFijoLegacy_(id) {
   id = String(id || "").trim();
   if (!id) return { ok: false, message: "ID vacío" };
 
@@ -491,9 +491,9 @@ function eliminarGastoFijo(id) {
   const detName = _gfSheetName_("SH_GASTOS_FIJOS_DETALLE", "DETALLE_GASTO_FIJO");
 
   let sh;
-  try { sh = obtenerSheet(shName); } catch (e) { return { ok: true }; }
+  try { sh = obtenerSheet_(shName); } catch (e) { return { ok: true }; }
   let shDet = null;
-  try { shDet = obtenerSheet(detName); } catch (e) { shDet = null; }
+  try { shDet = obtenerSheet_(detName); } catch (e) { shDet = null; }
 
   const main = _gfRead_(sh);
   const row0 = _gfFindRowIndexById_(main.rows, main.idx, id);
@@ -514,13 +514,13 @@ function eliminarGastoFijo(id) {
   return { ok: true };
 }
 
-function marcarAportePagado(aporteId, pagado) {
+function marcarAportePagadoLegacy_(aporteId, pagado) {
   aporteId = String(aporteId || "").trim();
   if (!aporteId) return { ok: false, message: "ID de aporte vacío" };
 
   const detName = _gfSheetName_("SH_GASTOS_FIJOS_DETALLE", "DETALLE_GASTO_FIJO");
   let shDet;
-  try { shDet = obtenerSheet(detName); } catch (e) { return { ok: false, message: "No existe hoja de detalle" }; }
+  try { shDet = obtenerSheet_(detName); } catch (e) { return { ok: false, message: "No existe hoja de detalle" }; }
 
   const det = _gfRead_(shDet);
   const row0 = _gfFindRowIndexById_(det.rows, det.idx, aporteId);
@@ -536,7 +536,7 @@ function marcarAportePagado(aporteId, pagado) {
   return { ok: true };
 }
 
-function marcarGastoFijoPagado(gastoId) {
+function marcarGastoFijoPagadoLegacy_(gastoId) {
   gastoId = String(gastoId || "").trim();
   if (!gastoId) return { ok: false, message: "ID vacío" };
 

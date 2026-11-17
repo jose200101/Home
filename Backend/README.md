@@ -1,32 +1,19 @@
-# Backend (Google Apps Script)
+# Backend de Home
 
-## Archivos
-- `Code.gs`: Endpoints para login (`login`, `validateToken`, `logout`) y `doGet()`.
-- `appsscript.json`: manifiesto con scopes mínimos para leer Spreadsheet.
+Google Apps Script con V8. La conexión se obtiene desde `conexion_()` y Script Properties.
 
-## Configuración rápida
-1. Abre Apps Script (script.google.com) y crea un proyecto (ideal: **vinculado** a tu Spreadsheet).
-2. Copia el contenido de `Code.gs`.
-3. (Opcional pero recomendado si NO es vinculado) En `CONFIG.SPREADSHEET_ID` pega el ID del Spreadsheet.
-4. Crea archivos HTML en Apps Script usando los de la carpeta **Frontend**:
-   - `Index` (Apps Script) / `Frontend/Index` (si usas carpetas con clasp)
-   - `_Styles` / `Frontend/_Styles`
-   - `_App` / `Frontend/_App`
-5. Deploy > New deployment > Web app:
-   - Execute as: **Me**
-   - Who has access: **Anyone** (o tu dominio)
-6. Abre la URL de la web app y prueba con un usuario en la hoja `USUARIOS`.
+- `HomeLedger.js`: motor del hogar; comandos completos en `HOME_EVENTOS`, importes en centavos.
+- `HomeAccess.js`: sesión y autorización de los endpoints históricos.
+- `LegacyEndpoints.js`: funciones públicas protegidas; delegan a implementaciones privadas terminadas en `_`.
+- `Code.js`: HTML Service y login anterior, pendiente de reemplazo por el proveedor de identidad.
+- `PersonasUsuarios`, `GastosFijos`, `GastosVariables`, `GastosNetos`, `Prestamos`: módulos anteriores.
 
-## Hoja esperada
-Pestaña: `USUARIOS`
-Encabezados (fila 1):
-- `id`, `nombreCompleto`, `nombre_usuario`, `contrasenia`, `rol`, `estado`
+Los endpoints de Home reciben el token explícitamente. Los históricos reciben como último argumento
+`{homeToken: token}`; el wrapper del frontend lo agrega automáticamente. No se debe invocar directamente
+una implementación privada desde el navegador. Todos los permisos se verifican en el servidor.
 
-> Nota: este ejemplo compara contraseñas en texto plano porque así está tu hoja. En producción, guarda hashes.
+Los módulos anteriores no se mezclan automáticamente con los saldos nuevos. Ver
+[modelo y límites](../docs/MODELO-HOME.md) y [transición](../docs/TRANSICION-Y-VALIDACION.md).
 
-
-## Tip: SPREADSHEET_ID sin tocar código
-Si tu proyecto NO está vinculado al Spreadsheet, puedes ir a **Project Settings → Script properties** y crear una propiedad:
-- `SPREADSHEET_ID` = `<ID del Google Sheet>`
-
-El backend ahora lo detecta automáticamente.
+No se desplegó ni se migraron datos reales. El login anterior sigue usando contraseñas en texto plano;
+la integración de identidad y recuperación queda pendiente y es requisito antes de exposición pública.

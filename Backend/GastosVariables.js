@@ -46,7 +46,7 @@ function _gvDateText_(iso) {
 }
 
 function _gvEnsureSheet_(name, headers) {
-  const ss = conexion();
+  const ss = conexion_();
   let sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
 
@@ -139,17 +139,17 @@ function _gvNormalizeISODate_(raw) {
  * Lista gastos variables con pagos.
  * @param {{id?:string,tipo?:string,deudorId?:string,acreedorId?:string,fechaFrom?:string,fechaTo?:string,q?:string,estado?:string}} params
  */
-function listarGastosVariables(params) {
+function listarGastosVariablesLegacy_(params) {
   params = params || {};
 
   const shName = _gvSheetName_("SH_GASTOS_VARIABLES", "GASTOS_VARIABLES");
   const detName = _gvSheetName_("SH_GASTOS_VARIABLES_DETALLE", "DETALLE_GASTO_VARIABLE");
 
   let sh;
-  try { sh = obtenerSheet(shName); } catch (e) { return []; }
+  try { sh = obtenerSheet_(shName); } catch (e) { return []; }
 
   let shDet = null;
-  try { shDet = obtenerSheet(detName); } catch (e) { shDet = null; }
+  try { shDet = obtenerSheet_(detName); } catch (e) { shDet = null; }
 
   const main = _gvRead_(sh);
   const det = shDet ? _gvRead_(shDet) : { headers: [], rows: [], idx: {} };
@@ -251,7 +251,7 @@ function listarGastosVariables(params) {
  * Crea o actualiza un gasto variable.
  * @param {object} payload
  */
-function guardarGastoVariable(payload) {
+function guardarGastoVariableLegacy_(payload) {
   payload = payload || {};
   const shName = _gvSheetName_("SH_GASTOS_VARIABLES", "GASTOS_VARIABLES");
   const detName = _gvSheetName_("SH_GASTOS_VARIABLES_DETALLE", "DETALLE_GASTO_VARIABLE");
@@ -334,10 +334,20 @@ function guardarGastoVariable(payload) {
  * Registra un pago/abono.
  * @param {{gastoId:string,monto:number|string,fechaPago:string,nota?:string,registradoPor?:string}} payload
  */
-function registrarPagoGastoVariable(payload) {
+function registrarPagoGastoVariableLegacy_(payload) {
   payload = payload || {};
   const gastoId = String(payload.gastoId || "").trim();
   if (!gastoId) return { ok: false, message: "gastoId vacío" };
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+  const cents = homeCents_(payload.monto);
+  const gasto = listarGastosVariablesLegacy_({ id: gastoId })[0];
+  if (!gasto) throw new Error('El gasto no existe.');
+  if (cents > Math.round(gasto.pendiente * 100)) throw new Error('El pago supera el saldo pendiente.');
+  const validDate = homeDate_(payload.fechaPago);
+  if (validDate > homeToday_() || (gasto.fecha && validDate < gasto.fecha)) throw new Error('Revisa la fecha del pago.');
 
   const detName = _gvSheetName_("SH_GASTOS_VARIABLES_DETALLE", "DETALLE_GASTO_VARIABLE");
   const shDet = _gvEnsureSheet_(detName, [
@@ -350,8 +360,8 @@ function registrarPagoGastoVariable(payload) {
   ]);
 
   const id = Utilities.getUuid();
-  const monto = _gvNum_(payload.monto);
-  const fechaPago = _gvNormalizeISODate_(payload.fechaPago);
+  const monto = cents / 100;
+  const fechaPago = validDate;
   const nota = String(payload.nota || "").trim();
   const registradoPor = String(payload.registradoPor || "").trim();
 
@@ -378,9 +388,10 @@ function registrarPagoGastoVariable(payload) {
   SpreadsheetApp.flush();
 
   return { ok: true, id };
+  } finally { lock.releaseLock(); }
 }
 
-function eliminarGastoVariable(id) {
+function eliminarGastoVariableLegacy_(id) {
   id = String(id || "").trim();
   if (!id) return { ok: false, message: "ID vacío" };
 
@@ -388,9 +399,9 @@ function eliminarGastoVariable(id) {
   const detName = _gvSheetName_("SH_GASTOS_VARIABLES_DETALLE", "DETALLE_GASTO_VARIABLE");
 
   let sh;
-  try { sh = obtenerSheet(shName); } catch (e) { return { ok: true }; }
+  try { sh = obtenerSheet_(shName); } catch (e) { return { ok: true }; }
   let shDet = null;
-  try { shDet = obtenerSheet(detName); } catch (e) { shDet = null; }
+  try { shDet = obtenerSheet_(detName); } catch (e) { shDet = null; }
 
   const main = _gvRead_(sh);
   const idx0 = _gvFindRowIndexById_(main.rows, main.idx, id);

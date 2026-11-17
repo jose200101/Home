@@ -5,6 +5,9 @@
    * Wrapper seguro para google.script.run
    */
   function gasCall(fnName, ...args) {
+    if (!["login", "validateToken", "logout"].includes(fnName)) {
+      args.push({ homeToken: localStorage.getItem("APP_TOKEN") || "" });
+    }
     return new Promise((resolve, reject) => {
       try {
         google.script.run
@@ -339,12 +342,12 @@
     );
   }
 
-  function Sidebar({ activeKey, onNavigate, onLogout }) {
+  function Sidebar({ activeKey, onNavigate, onLogout, admin }) {
     return (
       <aside className="wbs-sidebar">
         <div className="wbs-brand">
           <div className="wbs-brand-badge">
-            <div><i className="bi bi-scissors"></i></div>
+            <div><i className="bi bi-house-heart"></i></div>
           </div>
           <div className="wbs-brand-title">Home</div>
           <div className="wbs-brand-sep"></div>
@@ -356,15 +359,15 @@
             onClick={() => onNavigate("inicio")}
           >
             <i className="bi bi-house"></i>
-            <span>Inicio</span>
+            <span>Mi hogar</span>
           </button>
 
-          <button
+          {admin && <><button
             className={`wbs-navitem ${activeKey === "personas" ? "active" : ""}`}
             onClick={() => onNavigate("personas")}
           >
             <i className="bi bi-people"></i>
-            <span>Personas</span>
+            <span>Personas anteriores</span>
           </button>
 
           <button
@@ -372,7 +375,7 @@
             onClick={() => onNavigate("gastos")}
           >
             <i className="bi bi-cash-coin"></i>
-            <span>Gastos</span>
+            <span>Gastos anteriores</span>
           </button>
 
           <button
@@ -380,8 +383,9 @@
             onClick={() => onNavigate("prestamos")}
           >
             <i className="bi bi-cash-stack"></i>
-            <span>Prestamos</span>
+            <span>Préstamos anteriores</span>
           </button>
+          </>}
         </div>
 
         <div className="mt-auto wbs-nav-footer">
@@ -394,7 +398,7 @@
     );
   }
 
-  function MobileNav({ activeKey, onNavigate }) {
+  function MobileNav({ activeKey, onNavigate, admin }) {
     return (
       <nav className="wbs-mobile-nav">
         <button
@@ -402,15 +406,15 @@
           onClick={() => onNavigate("inicio")}
         >
           <i className="bi bi-house"></i>
-          <div>Inicio</div>
+          <div>Mi hogar</div>
         </button>
 
-        <button
+        {admin && <><button
           className={`wbs-mnav-item ${activeKey === "personas" ? "active" : ""}`}
           onClick={() => onNavigate("personas")}
         >
           <i className="bi bi-people"></i>
-          <div>Personas</div>
+          <div>Personas previas</div>
         </button>
 
         <button
@@ -418,7 +422,7 @@
           onClick={() => onNavigate("gastos")}
         >
           <i className="bi bi-cash-coin"></i>
-          <div>Gastos</div>
+          <div>Gastos previos</div>
         </button>
 
         <button
@@ -426,8 +430,9 @@
           onClick={() => onNavigate("prestamos")}
         >
           <i className="bi bi-cash-stack"></i>
-          <div>Prestamos</div>
+          <div>Préstamos previos</div>
         </button>
+        </>}
 
         <button
           className="wbs-mnav-item"
@@ -465,6 +470,7 @@
   }
 
   function ProtectedApp({ user, token, onLogout }) {
+    const admin = ['admin','administrador','propietario'].includes(String(user?.rol || '').trim().toLowerCase());
     const [activeKey, setActiveKey] = useState("inicio");
     const [gastosTab, setGastosTab] = useState("fijos");
     const [personasTab, setPersonasTab] = useState("personas");
@@ -510,12 +516,13 @@
         if (prestamosTab === "otorgar") return <PrestamosOtorgarView user={user} />;
         return <PrestamosSolicitarView user={user} />;
       }
-      return <InicioView user={user} />;
-    }, [activeKey, gastosTab, personasTab, prestamosTab, user]);
+      return <HomeCuentasView user={user} token={token} />;
+    }, [activeKey, gastosTab, personasTab, prestamosTab, user, token]);
 
     return (
       <div className="wbs-layout">
         <Sidebar
+          admin={admin}
           activeKey={activeKey}
           onNavigate={handleNavigate}
           onLogout={onLogout}
@@ -538,7 +545,7 @@
           </div>
         </main>
 
-        <MobileNav activeKey={activeKey} onNavigate={handleNavigate} />
+        <MobileNav activeKey={activeKey} onNavigate={handleNavigate} admin={admin} />
         <MoreOffcanvas onLogout={onLogout} />
       </div>
     );
@@ -565,7 +572,7 @@
         const u = JSON.parse(uRaw);
         const res = await gasCall("validateToken", t);
         if (res && res.ok) {
-          setUser(u);
+          setUser(res.user);
           setToken(t);
         } else {
           localStorage.removeItem("APP_TOKEN");

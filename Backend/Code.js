@@ -32,8 +32,7 @@ function doGet() {
   ]);
 
   return tpl.evaluate()
-    .setTitle("Acceso")
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setTitle("Home · Cuentas del hogar");
 }
 
 /** ==== HTML HELPERS (soporta carpetas Frontend/) ==== */
@@ -116,7 +115,7 @@ function login(username, password) {
   if (!found) return { ok: false, message: "Usuario o contraseña inválidos." };
 
   const estado = String(found.estado || "").trim().toLowerCase();
-  if (estado && estado !== "activo") {
+  if (estado !== "activo") {
     return { ok: false, message: "Usuario inactivo. Contacta al administrador." };
   }
 
@@ -187,9 +186,9 @@ function _tokenKey_(token) {
 }
 
 function _getSpreadsheet_() {
-  // 0) Si existe conexion() úsala (lee env_() / Script Properties / bound)
+  // 0) Si existe conexion_() úsala (lee env_() / Script Properties / bound)
   try {
-    if (typeof conexion === "function") return conexion();
+    if (typeof conexion_ === "function") return conexion_();
   } catch (e) {
     // seguimos con otros métodos
   }
@@ -251,7 +250,7 @@ function _readUsers_() {
     .filter(r => r.some(c => String(c || "").trim() !== ""))
     .map(r => ({
       id: get(r, "id"),
-      nombreCompleto: get(r, "nombreCompleto"),
+      nombreCompleto: get(r, "nombreCompleto") || get(r, "nombre_persona"),
       nombre_usuario: get(r, "nombre_usuario"),
       contrasenia: get(r, "contrasenia"),
       rol: get(r, "rol"),
@@ -283,7 +282,7 @@ function _getSheetByNameInsensitive_(ss, name) {
  * Diagnóstico rápido de permisos / cuenta Google.
  * Útil para casos donde en móvil se abre con otra cuenta.
  */
-function diagnosticoAcceso() {
+function diagnosticoAccesoLegacy_() {
   let eff = "";
   let act = "";
   try { eff = Session.getEffectiveUser().getEmail() || ""; } catch (_) {}

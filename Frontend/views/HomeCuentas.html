@@ -1,0 +1,1377 @@
+<script type="text/babel">
+  const homeMoney = (cents) =>
+    new Intl.NumberFormat("es-HN", {
+      style: "currency",
+      currency: "HNL",
+    }).format(cents / 100);
+  const homeLabels = {
+    INIT: "Hogar configurado",
+    PERSON: "Integrante actualizado",
+    TEMPLATE: "Gasto configurado",
+    CHARGE: "Factura registrada",
+    DEBT: "Deuda registrada",
+    PAYMENT: "Pago registrado",
+    CONFIRM: "Pago confirmado",
+    REJECT: "Pago rechazado",
+    FUND: "Factura pagada al proveedor",
+    VOID: "Movimiento anulado",
+  };
+  const homeMode = {
+    equal: "Partes iguales",
+    percent: "Porcentajes",
+    amount: "Montos definidos",
+  };
+  const homeRpc = (name, ...args) =>
+    new Promise((resolve, reject) =>
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)
+        [name](...args),
+    );
+  const homeRequestId = () =>
+    window.crypto?.randomUUID
+      ? window.crypto.randomUUID()
+      : "op_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+
+  function HomeField({ label, children, hint }) {
+    const id = React.useId();
+    return (
+      <div className="home-field">
+        <label htmlFor={id}>{label}</label>
+        {React.cloneElement(children, { id })}
+        {hint && <small>{hint}</small>}
+      </div>
+    );
+  }
+
+  function HomeDialog({ title, onClose, busy, children }) {
+    const ref = React.useRef(null);
+    React.useEffect(() => {
+      const el = ref.current;
+      el.showModal();
+      return () => {
+        if (el.open) el.close();
+      };
+    }, []);
+    return (
+      <dialog
+        ref={ref}
+        className="home-dialog"
+        aria-labelledby="home-dialog-title"
+        onCancel={(e) => {
+          e.preventDefault();
+          if (!busy) onClose();
+        }}
+      >
+        <div className="home-dialog-head">
+          <h2 id="home-dialog-title">{title}</h2>
+          <button
+            className="home-icon-btn"
+            aria-label="Cerrar"
+            disabled={busy}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        {children}
+      </dialog>
+    );
+  }
+
+  function HomeCuentasView({ user, token }) {
+    const [data, setData] = React.useState(null),
+      [tab, setTab] = React.useState("summary");
+    const [error, setError] = React.useState(""),
+      [notice, setNotice] = React.useState(""),
+      [loading, setLoading] = React.useState(true);
+    const [modal, setModal] = React.useState(null),
+      [form, setForm] = React.useState({}),
+      [review, setReview] = React.useState(false),
+      [busy, setBusy] = React.useState(false);
+    const [requestId, setRequestId] = React.useState(""),
+      [selected, setSelected] = React.useState(""),
+      [period, setPeriod] = React.useState("");
+    const [inventory, setInventory] = React.useState(null),
+      [accounts, setAccounts] = React.useState([]),
+      [formError, setFormError] = React.useState("");
+    const submitLock = React.useRef(false);
+    const name = (id) =>
+      data?.people.find((p) => p.id === id)?.name ||
+      (id ? "Integrante archivado" : "Proveedor");
+    const activePeople = (data?.people || []).filter((p) => p.active);
+    const participantPeople = (data?.people || []).filter(
+      (p) => p.active || form.participants?.some((v) => v.personId === p.id),
+    );
+    const personId = data?.admin ? selected : data?.me;
+    const today =
+      data?.today ||
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Tegucigalpa",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const state = await homeRpc("homeGetState", token);
+        setData(state);
+      } catch (e) {
+        setError(e.message || String(e));
+      } finally {
+        setLoading(false);
+      }
+    }
+    React.useEffect(() => {
+      load();
+    }, [token]);
+    function open(type, values = {}) {
+      setModal(type);
+      setForm({
+        date: today,
+        due: today,
+        period: today.slice(0, 7),
+        active: true,
+        mode: "equal",
+        participants: [],
+        ...values,
+      });
+      setRequestId(homeRequestId());
+      setReview(false);
+      setFormError("");
+      setError("");
+      if (type === "PERSON" && data.admin)
+        homeRpc("listarUsuarios", {}, { homeToken: token })
+          .then(setAccounts)
+          .catch((e) => setFormError(e.message));
+    }
+    function change(key, value) {
+      setForm((f) => ({ ...f, [key]: value }));
+      setReview(false);
+    }
+    function participant(id, checked) {
+      setForm((f) => ({
+        ...f,
+        participants: checked
+          ? [...f.participants, { personId: id, value: "" }]
+          : f.participants.filter((p) => p.personId !== id),
+      }));
+    }
+    function close() {
+      if (!busy) {
+        setModal(null);
+        setFormError("");
+      }
+    }
+    async function submit(e) {
+      e.preventDefault();
+      if (submitLock.current) return;
+      if (!review) {
+        setReview(true);
+        setFormError("");
+        return;
+      }
+      submitLock.current = true;
+      setBusy(true);
+      setFormError("");
+      try {
+        const res = await homeRpc("homeExecute", token, {
+          id: requestId,
+          type: modal,
+          payload: form,
+        });
+        setData(res.state);
+        setNotice(homeLabels[modal] + ".");
+        setModal(null);
+      } catch (e) {
+        setFormError(
+          (e.message || String(e)) +
+            " Puedes reintentar sin duplicar la operación.",
+        );
+      } finally {
+        setBusy(false);
+        submitLock.current = false;
+      }
+    }
+    function selectTemplate(id) {
+      const t = data.templates.find((t) => t.id === id);
+      setForm((f) => ({
+        ...f,
+        templateId: id,
+        mode: t?.mode || "equal",
+        participants: (t?.participants || []).map((p) => ({ ...p })),
+      }));
+    }
+    const allObs = data?.obligations || [];
+    const obs = allObs.filter(
+      (o) =>
+        (!personId || o.debtorId === personId || o.creditorId === personId) &&
+        (!period || (o.period || o.date.slice(0, 7)) === period),
+    );
+    const total = (pred) =>
+      obs.filter(pred).reduce((sum, o) => sum + o.pending, 0);
+    const pendingPayments = (data?.payments || []).filter(
+      (p) => p.status === "pending",
+    );
+    const due = total(
+      (o) =>
+        o.pending > 0 &&
+        !!o.creditorId &&
+        (!personId || o.debtorId === personId),
+    );
+    const receivable = total(
+      (o) =>
+        o.pending > 0 &&
+        !!o.creditorId &&
+        (!personId || o.creditorId === personId),
+    );
+    const providerDue = total(
+      (o) =>
+        o.pending > 0 &&
+        !o.creditorId &&
+        (!personId || o.debtorId === personId),
+    );
+    const debtPayment =
+      form.obligationId && allObs.find((o) => o.id === form.obligationId);
+    const options = (empty = "Selecciona un integrante") => (
+      <>
+        <option value="">{empty}</option>
+        {activePeople.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </>
+    );
+    const input = (label, key, type = "text", hint, required = true) => (
+      <HomeField label={label} hint={hint}>
+        <input
+          type={type}
+          required={required}
+          value={form[key] || ""}
+          onChange={(e) => change(key, e.target.value)}
+          {...(type === "number" ? { min: "0.01", step: "0.01" } : {})}
+        />
+      </HomeField>
+    );
+    const personSelect = (label, key, required = true, empty) => (
+      <HomeField label={label}>
+        <select
+          required={required}
+          value={form[key] || ""}
+          onChange={(e) => change(key, e.target.value)}
+        >
+          {options(empty)}
+        </select>
+      </HomeField>
+    );
+    const participantsEditor = (
+      <div className="home-participants">
+        <h3>¿Quiénes participan?</h3>
+        <p>Selecciona únicamente a quienes cubrirán este gasto.</p>
+        {activePeople.length === 0 && (
+          <p>Agrega integrantes antes de configurar un gasto.</p>
+        )}
+        {participantPeople.map((p) => {
+          const item = form.participants?.find((v) => v.personId === p.id);
+          return (
+            <div className="home-participant" key={p.id}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!!item}
+                  onChange={(e) => participant(p.id, e.target.checked)}
+                />
+                <span>
+                  {p.name}
+                  {p.active ? "" : " (archivado)"}
+                </span>
+              </label>
+              {item && form.mode !== "equal" && (
+                <input
+                  aria-label={`${form.mode === "percent" ? "Porcentaje" : "Monto"} de ${p.name}`}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={item.value}
+                  placeholder={form.mode === "percent" ? "%" : "L"}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setForm((f) => ({
+                      ...f,
+                      participants: f.participants.map((v) =>
+                        v.personId === p.id ? { ...v, value } : v,
+                      ),
+                    }));
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
+        <small>
+          {form.mode === "equal"
+            ? "Los centavos sobrantes se distribuyen siguiendo el orden de selección."
+            : form.mode === "percent"
+              ? "Los porcentajes deben sumar 100 %."
+              : "Los aportes deben sumar el total de la factura."}
+        </small>
+      </div>
+    );
+
+    if (loading && !data)
+      return (
+        <div className="home-shell" role="status">
+          Cargando las cuentas del hogar…
+        </div>
+      );
+    if (!data)
+      return (
+        <div className="home-shell">
+          <div className="home-alert" role="alert">
+            {error}
+          </div>
+          <button className="home-btn" onClick={load}>
+            Reintentar
+          </button>
+        </div>
+      );
+    return (
+      <div className="home-shell">
+        <header className="home-header">
+          <div>
+            <span className="home-eyebrow">
+              CUENTAS CLARAS, HOGAR TRANQUILO
+            </span>
+            <h1>{data.household}</h1>
+            <p>Un lugar para organizar lo que compartimos.</p>
+          </div>
+          <button
+            className="home-btn home-btn-light"
+            onClick={load}
+            disabled={loading || busy}
+          >
+            <i className="bi bi-arrow-clockwise" />{" "}
+            {loading ? "Actualizando…" : "Actualizar"}
+          </button>
+        </header>
+        {error && (
+          <div className="home-alert" role="alert">
+            {error}
+          </div>
+        )}
+        {notice && (
+          <div className="home-success" role="status">
+            {notice}
+            <button aria-label="Cerrar aviso" onClick={() => setNotice("")}>
+              ×
+            </button>
+          </div>
+        )}
+        {!data.initialized ? (
+          <section className="home-empty home-panel">
+            <i className="bi bi-house-heart" />
+            <h2>Empecemos por tu hogar</h2>
+            <p>
+              Configura el hogar, agrega sus integrantes y crea el primer gasto
+              compartido.
+            </p>
+            {data.admin ? (
+              <button
+                className="home-btn"
+                onClick={() => open("INIT", { name: "Mi hogar" })}
+              >
+                Configurar hogar
+              </button>
+            ) : (
+              <p>Un administrador debe completar la configuración.</p>
+            )}
+          </section>
+        ) : (
+          <>
+            {!data.admin && !data.me && (
+              <div className="home-alert">
+                Tu cuenta todavía no está vinculada a un integrante activo. Pide
+                al administrador que la vincule en Integrantes.
+              </div>
+            )}
+            <nav className="home-tabs" aria-label="Cuentas del hogar">
+              {[
+                ["summary", "Resumen", "bi-grid"],
+                ["charges", "Gastos compartidos", "bi-receipt"],
+                ["debts", "Deudas y pagos", "bi-arrow-left-right"],
+                ["people", "Integrantes", "bi-people"],
+                ...(data.admin
+                  ? [["settings", "Configuración", "bi-sliders"]]
+                  : []),
+              ].map(([id, label, icon]) => (
+                <button
+                  key={id}
+                  aria-current={tab === id ? "page" : undefined}
+                  className={tab === id ? "active" : ""}
+                  onClick={() => setTab(id)}
+                >
+                  <i className={"bi " + icon} />
+                  {label}
+                </button>
+              ))}
+            </nav>
+            {["summary", "debts", "charges"].includes(tab) && (
+              <div className="home-filters">
+                {data.admin ? (
+                  <HomeField label="Cuenta de">
+                    <select
+                      value={selected}
+                      onChange={(e) => setSelected(e.target.value)}
+                    >
+                      <option value="">Todo el hogar</option>
+                      {data.people.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                          {p.active ? "" : " (archivado)"}
+                        </option>
+                      ))}
+                    </select>
+                  </HomeField>
+                ) : (
+                  <div className="home-profile">
+                    <span className="home-avatar">
+                      {name(data.me).slice(0, 1)}
+                    </span>
+                    <strong>{data.me ? name(data.me) : "Mi cuenta"}</strong>
+                  </div>
+                )}
+                <HomeField label="Período">
+                  <input
+                    aria-label="Período"
+                    type="month"
+                    value={period}
+                    onChange={(e) => setPeriod(e.target.value)}
+                  />
+                </HomeField>
+                {period && (
+                  <button className="home-link" onClick={() => setPeriod("")}>
+                    Ver todos
+                  </button>
+                )}
+              </div>
+            )}
+            {tab === "summary" && (
+              <>
+                <div className="home-stats">
+                  <article className="home-stat">
+                    <span>
+                      {personId
+                        ? "Debes a integrantes"
+                        : "Deudas entre integrantes"}
+                    </span>
+                    <strong>{homeMoney(due)}</strong>
+                    <small>Incluye pagos aún sin confirmar</small>
+                  </article>
+                  <article className="home-stat home-stat-green">
+                    <span>
+                      {personId ? "Te deben" : "Por cobrar entre integrantes"}
+                    </span>
+                    <strong>{homeMoney(receivable)}</strong>
+                    <small>
+                      {personId
+                        ? "Dinero adelantado y préstamos"
+                        : "Es la misma deuda vista desde quien cobra"}
+                    </small>
+                  </article>
+                  <article className="home-stat">
+                    <span>Pendiente al proveedor</span>
+                    <strong>{homeMoney(providerDue)}</strong>
+                    <small>Aportes que aún no cubren una factura</small>
+                  </article>
+                </div>
+                <div className="home-columns">
+                  <section className="home-panel">
+                    <div className="home-panel-head">
+                      <h2>Lo próximo por resolver</h2>
+                      <button
+                        className="home-link"
+                        onClick={() => setTab("debts")}
+                      >
+                        Ver cuentas →
+                      </button>
+                    </div>
+                    {!obs.some((o) => o.pending > 0) ? (
+                      <div className="home-empty">
+                        <i className="bi bi-check2-circle" />
+                        <h3>Sin cuentas pendientes</h3>
+                        <p>
+                          Aquí aparecerán los aportes y deudas por resolver.
+                        </p>
+                      </div>
+                    ) : (
+                      obs
+                        .filter((o) => o.pending > 0)
+                        .sort((a, b) => a.due.localeCompare(b.due))
+                        .slice(0, 5)
+                        .map((o) => (
+                          <div className="home-list-row" key={o.id}>
+                            <div>
+                              <strong>{o.name}</strong>
+                              <small>
+                                {name(o.debtorId)} → {name(o.creditorId)} ·
+                                vence {o.due}
+                              </small>
+                            </div>
+                            <div className="home-right">
+                              <strong>{homeMoney(o.pending)}</strong>
+                              <span
+                                className={
+                                  "home-badge " +
+                                  (o.due < today ? "overdue" : "")
+                                }
+                              >
+                                {o.due < today ? "Vencido" : "Pendiente"}
+                              </span>
+                            </div>
+                          </div>
+                        ))
+                    )}
+                  </section>
+                  <section className="home-panel home-guide">
+                    <span className="home-eyebrow">
+                      CADA CUENTA EN SU LUGAR
+                    </span>
+                    <h2>Compartir sin confusiones</h2>
+                    <p>
+                      Cada servicio tiene sus propios participantes. Cambiar el
+                      próximo reparto conserva las facturas anteriores.
+                    </p>
+                    <ol>
+                      <li>Configura el gasto y sus participantes.</li>
+                      <li>Registra la factura del mes.</li>
+                      <li>Registra y confirma los pagos.</li>
+                    </ol>
+                    {data.admin && (
+                      <button
+                        className="home-btn"
+                        onClick={() => {
+                          setTab("charges");
+                          open("TEMPLATE");
+                        }}
+                      >
+                        Crear un gasto
+                      </button>
+                    )}
+                  </section>
+                </div>
+                {data.admin && (
+                  <section className="home-panel">
+                    <h2>Actividad reciente</h2>
+                    {data.audit
+                      .slice(-6)
+                      .reverse()
+                      .map((e) => (
+                        <div className="home-list-row" key={e.id}>
+                          <div>
+                            <strong>
+                              {homeLabels[e.type] || e.type}
+                              {e.voided ? " · anulado" : ""}
+                            </strong>
+                            <small>{e.note}</small>
+                          </div>
+                          <small>
+                            {new Date(e.at).toLocaleString("es-HN", {
+                              timeZone: "America/Tegucigalpa",
+                            })}
+                          </small>
+                        </div>
+                      ))}
+                  </section>
+                )}
+              </>
+            )}
+            {tab === "charges" && (
+              <>
+                {data.admin && (
+                  <section>
+                    <div className="home-section-head">
+                      <div>
+                        <h2>Gastos del hogar</h2>
+                        <p>Define quién participa en cada servicio.</p>
+                      </div>
+                      <button
+                        className="home-btn"
+                        onClick={() => open("TEMPLATE")}
+                      >
+                        + Nuevo gasto
+                      </button>
+                    </div>
+                    <div className="home-template-grid">
+                      {data.templates.map((t) => (
+                        <article
+                          className={
+                            "home-panel home-template " +
+                            (!t.active ? "home-muted" : "")
+                          }
+                          key={t.id}
+                        >
+                          <div className="home-template-icon">
+                            <i className="bi bi-receipt" />
+                          </div>
+                          <h3>{t.name}</h3>
+                          <p>{t.provider || "Sin proveedor definido"}</p>
+                          <div className="home-badge">{homeMode[t.mode]}</div>
+                          <p>
+                            {t.participants
+                              .map((p) => name(p.personId))
+                              .join(" · ")}
+                          </p>
+                          <div className="home-actions">
+                            <button
+                              className="home-btn home-btn-light"
+                              onClick={() =>
+                                open("TEMPLATE", {
+                                  ...t,
+                                  participants: t.participants.map((p) => ({
+                                    ...p,
+                                  })),
+                                })
+                              }
+                            >
+                              Editar
+                            </button>
+                            {t.active ? (
+                              <button
+                                className="home-btn"
+                                onClick={() => {
+                                  open("CHARGE", {
+                                    templateId: t.id,
+                                    mode: t.mode,
+                                    participants: t.participants.map((p) => ({
+                                      ...p,
+                                    })),
+                                  });
+                                }}
+                              >
+                                Registrar factura
+                              </button>
+                            ) : (
+                              <span className="home-badge">Archivado</span>
+                            )}
+                          </div>
+                        </article>
+                      ))}
+                      {!data.templates.length && (
+                        <div className="home-panel home-empty">
+                          <h3>Elige qué gastos compartir</h3>
+                          <p>
+                            Puedes crear energía eléctrica, Claro u otros
+                            servicios.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                )}
+                <section className="home-panel">
+                  <h2>Facturas y reparto</h2>
+                  <p>
+                    Los participantes de cada factura quedan guardados con su
+                    aporte.
+                  </p>
+                  {data.charges
+                    .filter(
+                      (c) =>
+                        (!period || c.period === period) &&
+                        (!personId ||
+                          c.shares.some((s) => s.personId === personId) ||
+                          c.payerId === personId),
+                    )
+                    .map((c) => (
+                      <article className="home-charge" key={c.id}>
+                        <div className="home-section-head">
+                          <div>
+                            <h3>
+                              {c.name}{" "}
+                              <span className="home-badge">{c.period}</span>
+                            </h3>
+                            <small>
+                              Vence {c.due} ·{" "}
+                              {c.payerId
+                                ? "Pagó " + name(c.payerId)
+                                : "Ver estado de aportes abajo"}
+                            </small>
+                          </div>
+                          <strong>{homeMoney(c.cents)}</strong>
+                        </div>
+                        <div className="home-share-list">
+                          {c.shares
+                            .filter((s) => data.admin || s.personId === data.me)
+                            .map((s) => (
+                              <span key={s.personId}>
+                                {name(s.personId)}{" "}
+                                <strong>{homeMoney(s.cents)}</strong>
+                              </span>
+                            ))}
+                        </div>
+                        <div className="home-actions">
+                          {data.admin &&
+                            !c.payerId &&
+                            allObs.some(
+                              (o) =>
+                                o.sourceId === c.id &&
+                                !o.creditorId &&
+                                o.pending > 0,
+                            ) && (
+                              <button
+                                className="home-btn home-btn-light"
+                                onClick={() => open("FUND", { chargeId: c.id })}
+                              >
+                                Un integrante pagó la factura completa
+                              </button>
+                            )}
+                          {data.admin && (
+                            <button
+                              className="home-link home-danger"
+                              onClick={() =>
+                                open("VOID", { targetId: c.id, name: c.name })
+                              }
+                            >
+                              Anular factura
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                    ))}
+                  {!data.charges.length && (
+                    <div className="home-empty">
+                      <p>Todavía no hay facturas registradas.</p>
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+            {tab === "debts" && (
+              <>
+                <div className="home-section-head">
+                  <div>
+                    <h2>Cuentas y movimientos</h2>
+                    <p>
+                      Registrar un pago entre integrantes requiere confirmar la
+                      recepción.
+                    </p>
+                  </div>
+                  {data.admin && (
+                    <button className="home-btn" onClick={() => open("DEBT")}>
+                      + Registrar deuda
+                    </button>
+                  )}
+                </div>
+                {pendingPayments.filter(
+                  (p) =>
+                    !personId ||
+                    p.debtorId === personId ||
+                    p.creditorId === personId,
+                ).length > 0 && (
+                  <section className="home-panel">
+                    <h2>Pagos por confirmar</h2>
+                    {pendingPayments
+                      .filter(
+                        (p) =>
+                          !personId ||
+                          p.debtorId === personId ||
+                          p.creditorId === personId,
+                      )
+                      .map((p) => (
+                        <div className="home-list-row" key={p.id}>
+                          <div>
+                            <strong>
+                              {homeMoney(p.cents)} · {name(p.debtorId)} →{" "}
+                              {name(p.creditorId)}
+                            </strong>
+                            <small>
+                              {p.date} · {p.note}
+                            </small>
+                          </div>
+                          {data.admin || data.me === p.creditorId ? (
+                            <div className="home-actions">
+                              <button
+                                className="home-btn"
+                                onClick={() =>
+                                  open("CONFIRM", {
+                                    paymentId: p.id,
+                                    amount: (p.cents / 100).toFixed(2),
+                                    name: `${name(p.debtorId)} → ${name(p.creditorId)}`,
+                                  })
+                                }
+                              >
+                                Confirmar recepción
+                              </button>
+                              <button
+                                className="home-link home-danger"
+                                onClick={() =>
+                                  open("REJECT", { paymentId: p.id })
+                                }
+                              >
+                                Rechazar
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="home-badge">
+                              Esperando al receptor
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                  </section>
+                )}
+                <section className="home-panel">
+                  <div className="home-table-wrap">
+                    <table className="home-table">
+                      <caption>Obligaciones y saldo pendiente</caption>
+                      <thead>
+                        <tr>
+                          <th>Concepto</th>
+                          <th>Quién debe</th>
+                          <th>A quién</th>
+                          <th>Saldo</th>
+                          <th>Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {obs.map((o) => (
+                          <tr key={o.id}>
+                            <td>
+                              <strong>{o.name}</strong>
+                              <small>
+                                {o.period || o.date} · vence {o.due}
+                              </small>
+                            </td>
+                            <td>{name(o.debtorId)}</td>
+                            <td>{name(o.creditorId)}</td>
+                            <td>
+                              <strong>{homeMoney(o.pending)}</strong>
+                              {o.reserved > 0 && (
+                                <small>
+                                  {homeMoney(o.reserved)} por confirmar
+                                </small>
+                              )}
+                            </td>
+                            <td>
+                              {o.pending - o.reserved > 0 &&
+                                (data.admin || data.me === o.debtorId) &&
+                                (!!o.creditorId || data.admin) && (
+                                  <button
+                                    className="home-btn home-btn-light"
+                                    onClick={() =>
+                                      open("PAYMENT", {
+                                        obligationId: o.id,
+                                        amount: (
+                                          (o.pending - o.reserved) /
+                                          100
+                                        ).toFixed(2),
+                                      })
+                                    }
+                                  >
+                                    Registrar pago
+                                  </button>
+                                )}
+                              {data.admin && o.kind === "debt" && (
+                                <button
+                                  className="home-link home-danger"
+                                  onClick={() =>
+                                    open("VOID", {
+                                      targetId: o.sourceId,
+                                      name: o.name,
+                                    })
+                                  }
+                                >
+                                  Anular
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!obs.length && (
+                      <div className="home-empty">
+                        No hay cuentas para este filtro.
+                      </div>
+                    )}
+                  </div>
+                </section>
+                <section className="home-panel">
+                  <h2>Historial de pagos</h2>
+                  {data.payments
+                    .filter(
+                      (p) =>
+                        (!personId ||
+                          p.debtorId === personId ||
+                          p.creditorId === personId) &&
+                        (!period || p.date.slice(0, 7) === period),
+                    )
+                    .slice()
+                    .reverse()
+                    .map((p) => (
+                      <div className="home-list-row" key={p.id}>
+                        <div>
+                          <strong>
+                            {homeMoney(p.cents)} · {name(p.debtorId)} →{" "}
+                            {name(p.creditorId)}
+                          </strong>
+                          <small>
+                            {p.date} · {p.note}
+                          </small>
+                        </div>
+                        <div className="home-actions">
+                          <span className="home-badge">
+                            {
+                              {
+                                pending: "Por confirmar",
+                                confirmed: "Confirmado",
+                                rejected: "Rechazado",
+                              }[p.status]
+                            }
+                          </span>
+                          {data.admin && (
+                            <button
+                              className="home-link home-danger"
+                              onClick={() =>
+                                open("VOID", {
+                                  targetId: p.id,
+                                  name: "Pago de " + homeMoney(p.cents),
+                                })
+                              }
+                            >
+                              Revertir
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  {!data.payments.length && (
+                    <p>Los pagos aparecerán aquí cuando los registres.</p>
+                  )}
+                </section>
+                {data.admin && (
+                  <section className="home-panel">
+                    <h2>Propuesta para simplificar pagos</h2>
+                    <p>
+                      Considera todas las cuentas del hogar, sin aplicar los
+                      filtros de arriba. No modifica ni cancela deudas. Acuerden
+                      cualquier compensación antes de registrarla por separado.
+                    </p>
+                    {data.plan.map((p, i) => (
+                      <div className="home-list-row" key={i}>
+                        <span>
+                          {name(p.debtorId)} → {name(p.creditorId)}
+                        </span>
+                        <strong>{homeMoney(p.cents)}</strong>
+                      </div>
+                    ))}
+                    {!data.plan.length && (
+                      <p>No hay transferencias sugeridas.</p>
+                    )}
+                  </section>
+                )}
+              </>
+            )}
+            {tab === "people" && (
+              <>
+                <div className="home-section-head">
+                  <div>
+                    <h2>Integrantes</h2>
+                    <p>Cada persona tiene sus propios aportes y cuentas.</p>
+                  </div>
+                  {data.admin && (
+                    <button className="home-btn" onClick={() => open("PERSON")}>
+                      + Agregar integrante
+                    </button>
+                  )}
+                </div>
+                <div className="home-template-grid">
+                  {data.people.map((p) => (
+                    <article className="home-panel" key={p.id}>
+                      <span className="home-avatar">{p.name.slice(0, 1)}</span>
+                      <h3>{p.name}</h3>
+                      <p>
+                        {p.active ? "Activo" : "Archivado"}
+                        {data.admin
+                          ? p.userId
+                            ? " · Con cuenta vinculada"
+                            : " · Sin cuenta vinculada"
+                          : ""}
+                      </p>
+                      <div className="home-actions">
+                        {data.admin ? (
+                          <>
+                            <button
+                              className="home-btn home-btn-light"
+                              onClick={() => {
+                                setSelected(p.id);
+                                setTab("summary");
+                              }}
+                            >
+                              Ver cuentas
+                            </button>
+                            <button
+                              className="home-link"
+                              onClick={() => open("PERSON", p)}
+                            >
+                              Editar
+                            </button>
+                          </>
+                        ) : (
+                          p.id === data.me && (
+                            <button
+                              className="home-btn home-btn-light"
+                              onClick={() => setTab("summary")}
+                            >
+                              Ver mis cuentas
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                {!data.people.length && (
+                  <div className="home-panel home-empty">
+                    Agrega a las personas que comparten los gastos de tu casa.
+                  </div>
+                )}
+              </>
+            )}
+            {tab === "settings" && data.admin && (
+              <>
+                <section className="home-panel">
+                  <h2>Transición de los datos anteriores</h2>
+                  <p>
+                    Las cuentas nuevas se administran por separado. No se han
+                    importado deudas ni pagos históricos; no los registres de
+                    nuevo sin conciliar sus saldos.
+                  </p>
+                  <button
+                    className="home-btn home-btn-light"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        setInventory(
+                          await homeRpc("homeMigrationPreview", token),
+                        );
+                      } catch (e) {
+                        setError(e.message);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    Revisar estructura anterior
+                  </button>
+                  {inventory && (
+                    <div className="home-table-wrap">
+                      <table className="home-table">
+                        <caption>
+                          Inventario de solo lectura. Las filas pueden incluir
+                          fórmulas o espacios.
+                        </caption>
+                        <thead>
+                          <tr>
+                            <th>Hoja</th>
+                            <th>Filas</th>
+                            <th>Encabezados</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {inventory.map((s) => (
+                            <tr key={s.sheet}>
+                              <td>{s.sheet}</td>
+                              <td>{s.rows}</td>
+                              <td>{s.headers.join(" · ")}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+                <section className="home-panel">
+                  <h2>Historial de cambios</h2>
+                  <p>
+                    Las correcciones conservan el registro original y su motivo.
+                  </p>
+                  {data.audit
+                    .slice()
+                    .reverse()
+                    .map((e) => (
+                      <div className="home-list-row" key={e.id}>
+                        <div>
+                          <strong>
+                            {homeLabels[e.type] || e.type}
+                            {e.voided ? " · anulado" : ""}
+                          </strong>
+                          <small>
+                            {e.note} · cuenta {e.actor}
+                          </small>
+                        </div>
+                        <small>
+                          {new Date(e.at).toLocaleString("es-HN", {
+                            timeZone: "America/Tegucigalpa",
+                          })}
+                        </small>
+                      </div>
+                    ))}
+                </section>
+              </>
+            )}
+          </>
+        )}
+        {modal && (
+          <HomeDialog
+            title={
+              {
+                INIT: "Configurar hogar",
+                PERSON: form.id ? "Editar integrante" : "Agregar integrante",
+                TEMPLATE: form.id ? "Editar gasto" : "Crear gasto",
+                CHARGE: "Registrar factura",
+                DEBT: "Registrar deuda entre integrantes",
+                PAYMENT: "Registrar pago",
+                CONFIRM: "Confirmar recepción",
+                REJECT: "Rechazar pago",
+                FUND: "Registrar pago completo al proveedor",
+                VOID: "Anular movimiento",
+              }[modal]
+            }
+            onClose={close}
+            busy={busy}
+          >
+            <form onSubmit={submit}>
+              <fieldset disabled={busy || review} className="home-form">
+                {modal === "INIT" && input("Nombre del hogar", "name")}
+                {modal === "PERSON" && (
+                  <>
+                    {input("Nombre del integrante", "name")}
+                    <HomeField
+                      label="Cuenta de acceso vinculada"
+                      hint="La cuenta solo podrá consultar las obligaciones de este integrante. Puedes vincularla después."
+                    >
+                      <select
+                        value={form.userId || ""}
+                        onChange={(e) => change("userId", e.target.value)}
+                      >
+                        <option value="">Sin cuenta por ahora</option>
+                        {accounts.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.nombre_usuario} · {u.nombre_persona}
+                          </option>
+                        ))}
+                      </select>
+                    </HomeField>
+                    {form.id && (
+                      <label className="home-check">
+                        <input
+                          type="checkbox"
+                          checked={form.active}
+                          onChange={(e) => change("active", e.target.checked)}
+                        />
+                        Integrante activo
+                      </label>
+                    )}
+                  </>
+                )}
+                {["TEMPLATE", "CHARGE"].includes(modal) && (
+                  <>
+                    {modal === "TEMPLATE" ? (
+                      <>
+                        {input(
+                          "Nombre del gasto",
+                          "name",
+                          "text",
+                          "Por ejemplo, Energía eléctrica o Claro: cable e internet",
+                        )}
+                        {input("Proveedor", "provider", "text", null, false)}
+                      </>
+                    ) : (
+                      <>
+                        <HomeField label="Gasto">
+                          <select
+                            required
+                            value={form.templateId || ""}
+                            onChange={(e) => selectTemplate(e.target.value)}
+                          >
+                            <option value="">Selecciona un gasto</option>
+                            {data.templates
+                              .filter((t) => t.active)
+                              .map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name}
+                                </option>
+                              ))}
+                          </select>
+                        </HomeField>
+                        <div className="home-form-grid">
+                          {input("Período", "period", "month")}
+                          {input("Total de la factura (L)", "amount", "number")}
+                          {input("Fecha de emisión", "date", "date")}
+                          {input("Vencimiento", "due", "date")}
+                        </div>
+                      </>
+                    )}
+                    <HomeField label="Distribución">
+                      <select
+                        value={form.mode}
+                        onChange={(e) => change("mode", e.target.value)}
+                      >
+                        {Object.entries(homeMode).map(([id, label]) => (
+                          <option key={id} value={id}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </HomeField>
+                    {participantsEditor}
+                    {modal === "TEMPLATE" && form.id && (
+                      <>
+                        <label className="home-check">
+                          <input
+                            type="checkbox"
+                            checked={form.active}
+                            onChange={(e) => change("active", e.target.checked)}
+                          />
+                          Gasto activo
+                        </label>
+                        <p className="home-info">
+                          Los cambios se aplican a las próximas facturas. Las
+                          anteriores conservan su reparto.
+                        </p>
+                      </>
+                    )}
+                    {modal === "CHARGE" &&
+                      personSelect(
+                        "¿Alguien ya pagó la factura completa?",
+                        "payerId",
+                        false,
+                        "No, todavía se debe al proveedor",
+                      )}
+                  </>
+                )}
+                {modal === "DEBT" && (
+                  <>
+                    {input(
+                      "Concepto",
+                      "name",
+                      "text",
+                      "Ejemplo: préstamo para una compra. Registra solo dinero ya entregado; sin intereses en este módulo.",
+                    )}
+                    {personSelect("¿Quién debe?", "debtorId")}
+                    {personSelect("¿A quién le debe?", "creditorId")}
+                    <div className="home-form-grid">
+                      {input("Monto (L)", "amount", "number")}
+                      {input("Fecha de entrega del dinero", "date", "date")}
+                      {input("Fecha acordada de pago", "due", "date")}
+                    </div>
+                  </>
+                )}
+                {modal === "PAYMENT" && (
+                  <>
+                    <p className="home-info">
+                      {debtPayment?.name}: {name(debtPayment?.debtorId)} →{" "}
+                      {name(debtPayment?.creditorId)}.<br />
+                      {debtPayment?.creditorId
+                        ? "El saldo se reduce cuando el receptor confirma."
+                        : "Solo registra dinero ya pagado al proveedor; no dinero recaudado en custodia."}
+                    </p>
+                    {input("Monto entregado (L)", "amount", "number")}
+                    {input("Fecha del pago", "date", "date")}
+                    {input("Referencia o nota", "note", "text", null, false)}
+                  </>
+                )}
+                {modal === "FUND" && (
+                  <>
+                    <p className="home-info">
+                      Registra únicamente una factura completa ya pagada y sin
+                      abonos. Los aportes de los demás pasarán a ser reembolsos
+                      a quien pagó.
+                    </p>
+                    {personSelect("¿Quién pagó al proveedor?", "payerId")}
+                    {input("Fecha del pago", "date", "date")}
+                  </>
+                )}
+                {modal === "CONFIRM" && (
+                  <p className="home-info">
+                    Confirma que se recibieron{" "}
+                    {homeMoney(Math.round(Number(form.amount) * 100))} de este
+                    movimiento: {form.name}.
+                  </p>
+                )}
+                {modal === "REJECT" &&
+                  input("Motivo del rechazo", "reason", "text")}
+                {modal === "VOID" && (
+                  <>
+                    <p className="home-info">
+                      {form.name}. Se conservará el historial y se recalcularán
+                      los saldos. Si tiene movimientos relacionados, primero
+                      deberán resolverse.
+                    </p>
+                    {input("Motivo de la anulación", "reason", "text")}
+                  </>
+                )}
+              </fieldset>
+              {review && (
+                <div className="home-review" role="status">
+                  <strong>Revisa los datos antes de confirmar</strong>
+                  <p>
+                    La operación quedará registrada en el historial del hogar.
+                  </p>
+                  {form.amount && (
+                    <strong>
+                      {homeMoney(Math.round(Number(form.amount) * 100))}
+                    </strong>
+                  )}
+                  {form.participants?.length > 0 && (
+                    <p>
+                      {form.participants
+                        .map(
+                          (p) =>
+                            name(p.personId) +
+                            (form.mode === "equal"
+                              ? ""
+                              : ": " +
+                                p.value +
+                                (form.mode === "percent" ? " %" : " L")),
+                        )
+                        .join(" · ")}
+                    </p>
+                  )}
+                </div>
+              )}
+              {formError && (
+                <div className="home-alert" role="alert">
+                  {formError}
+                </div>
+              )}
+              <div className="home-dialog-actions">
+                <button
+                  type="button"
+                  className="home-btn home-btn-light"
+                  disabled={busy}
+                  onClick={() => (review ? setReview(false) : close())}
+                >
+                  {review ? "Volver a editar" : "Cancelar"}
+                </button>
+                <button type="submit" className="home-btn" disabled={busy}>
+                  {busy
+                    ? "Guardando…"
+                    : review
+                      ? "Confirmar y guardar"
+                      : "Revisar datos"}
+                </button>
+              </div>
+            </form>
+          </HomeDialog>
+        )}
+      </div>
+    );
+  }
+</script>

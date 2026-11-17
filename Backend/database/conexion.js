@@ -1,9 +1,9 @@
 /**
- * conexion
+ * conexion_
  * Retorna el Spreadsheet "base de datos".
  * @return {GoogleAppsScript.Spreadsheet.Spreadsheet}
  */
-function conexion() {
+function conexion_() {
   const id = String(env_().ID_DATABASE || "").trim();
 
   if (id) {
@@ -50,10 +50,10 @@ function conexion() {
  * @param {String} NAME nombre de la hoja
  * @return {GoogleAppsScript.Spreadsheet.Sheet}
  */
-function obtenerSheet(NAME) {
-  const ss = conexion();
+function obtenerSheet_(NAME) {
+  const ss = conexion_();
   const name = String(NAME || "").trim();
-  if (!name) throw new Error("obtenerSheet(NAME): NAME vacío.");
+  if (!name) throw new Error("obtenerSheet_(NAME): NAME vacío.");
 
   // Primero, intento directo
   let sh = ss.getSheetByName(name);
@@ -73,6 +73,6 @@ function obtenerSheet(NAME) {
  * @param {String} NAME nombre de la hoja
  * @return {Array<Array<string>>}
  */
-function obtenerDatos(NAME) {
-  return obtenerSheet(NAME).getDataRange().getDisplayValues();
+function obtenerDatos_(NAME) {
+  return obtenerSheet_(NAME).getDataRange().getDisplayValues();
 }

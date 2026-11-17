@@ -1,0 +1,12 @@
+**/node_modules/**
+tools/**
+tests/**
+docs/**
+preview/**
+**/*.md
+package.json
+package-lock.json
+**/*.cjs
+**/*.png
+**/*.zip
+**/*.log

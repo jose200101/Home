@@ -1,28 +1,20 @@
-# Frontend (React + Bootstrap 5 + Babel dentro de Apps Script)
+# Interfaz de Home
 
-Estos archivos están pensados para usarse con **HTML Service** en Apps Script.
+React 18 + Bootstrap 5, con JSX compilado mediante Babel en HTML Service.
 
-## Archivos
-- `Index` (Apps Script) / `Frontend/Index` (si usas carpetas con clasp): página principal que carga Bootstrap, React y Babel, e incluye parciales.
-- `_Styles` / `Frontend/_Styles`: estilos para replicar el look & feel del video (fondo oscuro + dorado).
-- `_App` / `Frontend/_App`: App React con Login y Dashboard placeholder.
+- `Index.html`: carga estilos, dependencias y vistas.
+- `_App.html`: acceso anterior, sesión, navegación y puente de RPC histórico.
+- `views/HomeCuentas.html`: experiencia principal del hogar.
+- `_HomeStyles.html`: estilos responsivos, formularios y diálogos accesibles.
+- Otras vistas: consulta y mantenimiento de los módulos anteriores por administradores.
 
-## Cómo usar
-En el editor de Apps Script:
-1. Crea 3 archivos HTML con estos mismos nombres:
-   - `Index` (Apps Script) / `Frontend/Index` (si usas carpetas con clasp)
-   - `_Styles` / `Frontend/_Styles`
-   - `_App` / `Frontend/_App`
-2. Pega el contenido correspondiente en cada uno.
-3. Deploy como Web App.
+La experiencia principal incluye Resumen, Gastos compartidos, Deudas y pagos, Integrantes y Configuración.
+Los diálogos tienen revisión antes de guardar, bloqueo de envío simultáneo y mensajes de error.
+Las operaciones usan IDs estables para reintentar sin duplicar movimientos.
 
-## Personalización rápida
-- Cambia el nombre/branding en `_App` / `Frontend/_App` (texto "Wilito BarberShop" y subtítulo).
-- Ajusta colores en `_Styles` / `Frontend/_Styles` (variables `--gold`, etc.).
+La vista de integrante es personal. Ocultar botones es solo presentación: el backend comprueba permisos
+y filtra datos antes de enviarlos al navegador. El proveedor de autenticación y la recuperación siguen pendientes.
 
-
-## Tip: SPREADSHEET_ID sin tocar código
-Si tu proyecto NO está vinculado al Spreadsheet, puedes ir a **Project Settings → Script properties** y crear una propiedad:
-- `SPREADSHEET_ID` = `<ID del Google Sheet>`
-
-El backend ahora lo detecta automáticamente.
+Desde la carpeta Home, `npm run preview` inicia una demostración con datos ficticios, sin conexión a Google.
+La barra permite cambiar de administrador a integrante. `npm test` valida el motor y las puertas de acceso.
+Las dependencias vía CDN y el runtime de HTML Service necesitan validación final antes del despliegue.

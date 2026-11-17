@@ -239,7 +239,7 @@ function _gnBuildPersonDirectory_() {
   // PERSONAS
   try {
     if (typeof listarPersonasActivas === "function") {
-      (listarPersonasActivas() || []).forEach(p => {
+      (listarPersonasActivasLegacy_() || []).forEach(p => {
         const id = String(p?.id_persona || p?.id || "").trim();
         const nombre = String(p?.nombre_persona || p?.nombre || "").trim();
         if (id && nombre && !dir[id]) dir[id] = { id, nombre };
@@ -250,7 +250,7 @@ function _gnBuildPersonDirectory_() {
   // USUARIOS
   try {
     if (typeof listarUsuariosActivos === "function") {
-      (listarUsuariosActivos() || []).forEach(u => {
+      (listarUsuariosActivosLegacy_() || []).forEach(u => {
         const id = String(u?.id || "").trim();
         const nombre = String(u?.nombreCompleto || u?.nombre_usuario || "").trim();
         if (id && nombre && !dir[id]) dir[id] = { id, nombre };
@@ -261,7 +261,7 @@ function _gnBuildPersonDirectory_() {
   return dir;
 }
 
-function listarPersonasNetosActivas() {
+function listarPersonasNetosActivasLegacy_() {
   const dir = _gnBuildPersonDirectory_();
   const out = Object.keys(dir).map(id => dir[id]);
   out.sort((a, b) => String(a.nombre || "").localeCompare(String(b.nombre || "")));
@@ -329,7 +329,7 @@ function _gnFetchData_(parsed, ctx) {
       if (hasta) p.venceTo = hasta;
     }
     if (personaId) p.personaId = personaId;
-    fijos = listarGastosFijos(p) || [];
+    fijos = listarGastosFijosLegacy_(p) || [];
     if (!incluirPagados) {
       fijos = fijos.filter(g => _gnNum_(g.pendiente) > 0.000001);
     }
@@ -340,7 +340,7 @@ function _gnFetchData_(parsed, ctx) {
     const p = {};
     if (desde) p.fechaFrom = desde;
     if (hasta) p.fechaTo = hasta;
-    vars = listarGastosVariables(p) || [];
+    vars = listarGastosVariablesLegacy_(p) || [];
 
     if (personaId) {
       vars = vars.filter(v => {
@@ -520,7 +520,7 @@ function _gnComputeBalance_(fijos, vars, parsed, ctx) {
 /**
  * Endpoint unificado para UI (fase 2): cards + balance en 1 sola llamada.
  */
-function getGastosNetosDashboard(params) {
+function getGastosNetosDashboardLegacy_(params) {
   const parsed = _gnParseParams_(params);
   const ctx = _gnGetPersonContext_();
   const { fijos, vars } = _gnFetchData_(parsed, ctx);
@@ -544,7 +544,7 @@ function getGastosNetosDashboard(params) {
   };
 }
 
-function getGastosNetosBalance(params) {
+function getGastosNetosBalanceLegacy_(params) {
   const parsed = _gnParseParams_(params);
   const ctx = _gnGetPersonContext_();
   const { fijos, vars } = _gnFetchData_(parsed, ctx);
@@ -557,7 +557,7 @@ function getGastosNetosBalance(params) {
  * @param {{modo?:("mes"|"rango"),periodo?:string,desde?:string,hasta?:string,tipo?:string,personaId?:string,incluirPagados?:boolean}} params
  */
 
-function getGastosNetosResumen(params) {
+function getGastosNetosResumenLegacy_(params) {
   try {
     const parsed = _gnParseParams_(params);
     const cacheKey = 'gn:resumen:v3:' + _gnHashKey_(JSON.stringify({
@@ -824,7 +824,7 @@ function _gnBuildDetallePersona_(personaId, fijos, vars, ctx) {
  * Detalle por persona para modal (Fase 3).
  * @param {{personaId:string,modo?:string,periodo?:string,desde?:string,hasta?:string,tipo?:string,incluirPagados?:boolean}} params
  */
-function getGastosNetosDetallePersona(params) {
+function getGastosNetosDetallePersonaLegacy_(params) {
   try {
     params = params || {};
     const personaId = String(params.personaId || "").trim();
@@ -869,7 +869,7 @@ function getGastosNetosDetallePersona(params) {
  *
  * @param {{modo?:('mes'|'rango'),periodo?:string,desde?:string,hasta?:string,tipo?:string,personaId?:string,incluirPagados?:boolean}} params
  */
-function getGastosNetosPlanLiquidacion(params) {
+function getGastosNetosPlanLiquidacionLegacy_(params) {
   try {
     const parsed = _gnParseParams_(params);
 
