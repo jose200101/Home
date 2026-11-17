@@ -2,7 +2,8 @@
   "name": "home-cuentas",
   "private": true,
   "scripts": {
-    "test": "node --test tests/*.test.cjs",
-    "preview": "node tools/preview.cjs"
+    "build": "node tools/build.cjs",
+    "test": "npm run build && node --test tests/*.test.cjs",
+    "preview": "npm run build && node tools/preview.cjs"
   }
 }

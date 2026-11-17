@@ -100,7 +100,7 @@ function createHarness() {
   });
   for (const name of ["HomeLedger.js", "HomeAccess.js"])
     vm.runInContext(
-      fs.readFileSync(path.join(__dirname, "../Backend", name), "utf8"),
+      fs.readFileSync(path.join(__dirname, "../dist/Backend", name), "utf8"),
       context,
       { filename: name },
     );

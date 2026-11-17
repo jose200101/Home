@@ -1,52 +1,39 @@
-# Home · Cuentas del hogar
+# HOME — Administración financiera del hogar
 
-Web app de Google Apps Script + Google Sheets, con React y Bootstrap en HTML Service.
-Administra servicios compartidos con participantes independientes, facturas, deudas entre integrantes,
-adelantos, pagos por confirmar y estados de cuenta en lempiras.
+Proyecto basado en **Google Apps Script V8 + Google Sheets + React (JavaScript)**. Google Drive será el almacén de comprobantes cuando se implemente ese módulo. HNL y `America/Tegucigalpa`.
 
 ## Estado
 
-Implementación local del primer modelo. No se desplegó, no se migraron saldos y no se modificó el Spreadsheet real.
-El proveedor de autenticación y la recuperación de contraseña están pendientes por decisión del alcance actual.
-El login anterior aún compara contraseñas en texto plano: cerrar esa fase antes de uso público con datos reales.
+**Fase 1: reorganización estructural.** No modifica reglas financieras, despliegues ni datos reales. La implementación actual todavía conserva módulos heredados para permitir una sustitución segura posterior. El modelo funcional de HOME v1 está documentado en [Especificación HOME v1](docs/functional/HOME-v1.md).
 
-## Desarrollo
+La autenticación actual es heredada y su reemplazo se ha pospuesto. **No desplegar públicamente con datos financieros reales** antes de corregirla y validar permisos.
 
-```powershell
+## Desarrollo local
+
+Requiere Node.js 20 o posterior.
+
+```bash
 npm test
 npm run preview
+npm run build
 ```
 
-Vista previa: http://127.0.0.1:4173. Usa datos ficticios en memoria y el mismo motor de cuentas.
-La barra de demostración permite ver la aplicación como administrador o integrante.
-Los módulos históricos no se simulan en el navegador local.
+`npm test` construye `dist/` y ejecuta las pruebas existentes más las pruebas de estructura. `npm run preview` construye `dist/` y sirve una demostración local con datos **ficticios**, sin conexión a Google. `npm run build` copia fuentes a `dist/` conservando exactamente los nombres de archivos del proyecto Apps Script vigente.
 
 ## Estructura
 
-- `Backend/HomeLedger.js`: validación, historial, proyecciones, comandos y consultas autorizadas.
-- `Backend/HomeAccess.js` y `LegacyEndpoints.js`: autorización de módulos anteriores.
-- `Frontend/views/HomeCuentas.html`: resumen, gastos, facturas, deudas, pagos, integrantes y configuración.
-- `Frontend/_HomeStyles.html`: interfaz adaptable a móvil.
-- `Backend/config/env.js`: conexión configurable mediante Script Property `SPREADSHEET_ID`.
-- `tests/`: pruebas de integridad y permisos con servicios simulados.
-- `tools/preview.cjs`: servidor local, sin llamadas a Google.
+- `src/server/domain/`: reglas de dominio futuras (crear por módulo, en próximos commits).
+- `src/server/modules/home/`: motor financiero actual (`HomeLedger.js`), pendiente de división modular.
+- `src/server/legacy/`: implementación histórica en transición; no usar para nuevas reglas.
+- `src/server/infrastructure/`: configuración y conexión actual a Sheets.
+- `src/client/`: interfaz y vistas existentes, separadas de vistas históricas.
+- `src/gas/appsscript.json`: manifiesto de Apps Script.
+- `tools/build-manifest.cjs`: mapa fuente → nombre GAS conservado.
+- `dist/`: salida generada, ignorada por Git, **único destino de clasp**.
+- `docs/legacy/`: documentación anterior conservada como referencia histórica.
 
-## Preparación de Apps Script
+Revisar [Arquitectura y despliegue](docs/architecture/STRUCTURE.md), [Transición de datos](docs/migration/PLAN-DATOS.md) y [Mapa de pantallas](docs/ux-ui/MAP.md).
 
-1. Usar un proyecto y una copia de Spreadsheet de prueba, separados de los datos reales.
-2. Configurar `SPREADSHEET_ID` en Script Properties; el código conserva el ID anterior como fallback.
-3. Mantener nombres de archivos y carpetas de HTML; `doGet` sirve `Frontend/Index`.
-4. La hoja `USUARIOS` conserva `id`, `nombre_persona` (o `nombreCompleto`), `nombre_usuario`,
-   `contrasenia`, `rol` y `estado`. El acceso exige estado `Activo`.
-5. Para configurar Home se requiere rol `Admin`, `Administrador` o `Propietario`.
-6. Configurar el hogar, agregar integrantes, vincular cuentas y crear tipos de gasto desde la interfaz.
-   Se crea `HOME_EVENTOS` con la primera operación; el módulo nuevo no escribe hojas históricas.
-7. Completar autenticación y validar HTML Service antes de habilitar usuarios reales.
+## Precauciones
 
-No ejecutar `clasp push` sobre el proyecto real sin revisar destino y diff. `.claspignore` excluye
-pruebas, herramientas, documentación y capturas. No publicar la vista previa como sustituto de Apps Script.
-
-## Documentación
-
-- [Modelo, reglas, permisos y límites](docs/MODELO-HOME.md)
-- [Transición, pruebas y pendientes de activación](docs/TRANSICION-Y-VALIDACION.md)
+No ejecutar `clasp push` sobre el script real ni migrar datos hasta validar primero una copia aislada de Apps Script y de Google Sheets. `main` debe permanecer sin cambios hasta revisar la rama y sus pruebas. No registrar credenciales ni IDs de usuarios en documentación o pruebas.
