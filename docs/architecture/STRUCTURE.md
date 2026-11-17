@@ -22,7 +22,7 @@ Ejecutar `npm run build`: `tools/build.cjs` valida la existencia de archivos y c
 
 Los nombres de salida preservan temporalmente las llamadas `HtmlService.createTemplateFromFile('Frontend/Index')` y `include('views/HomeCuentas')`. No deben cambiarse a ciegas.
 
-`npm test` y `npm run preview` compilan primero. Los tests y la vista previa leen la salida `dist/`. CI comprueba que las copias y plantillas existan.
+`npm test` y `npm run preview` compilan primero. Los tests y la vista previa leen la salida `dist/`. CI comprueba que las copias y plantillas existan. El comando `npm run smoke` levanta la vista previa, verifica HTML y RPC con usuarios ficticios, y comprueba que el integrante no reciba catálogos ni auditoría de administración.
 
 ## Despliegue aislado
 

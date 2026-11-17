@@ -17,3 +17,5 @@ jobs:
           node-version: "20"
       - name: Build and tests
         run: npm test
+      - name: Smoke test (preview and RPC)
+        run: npm run smoke
