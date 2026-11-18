@@ -59,8 +59,10 @@ function homeAgreementProposal_(proposal, actor) {
   });
   const out = { resourceId, kind, mode, participants, createdBy: actor.id, status: "pending" };
   if (kind === "occasional") {
-    if (proposal.payerId !== actor.id) throw new Error("Solo quien pagó puede registrar su compra.");
-    out.payerId = actor.id;
+    if (!actor.personId || proposal.payerId !== actor.personId)
+      throw new Error("Solo quien pagó puede registrar su compra.");
+    homeAgreementId_(actor.personId);
+    out.payerId = actor.personId;
   } else if (proposal.payerId) throw new Error("El pagador recurrente se elige al pagar la factura.");
   if (kind === "occasional" || mode === "amount") {
     if (!Number.isSafeInteger(proposal.amountCents) ||
@@ -109,7 +111,7 @@ function homeAgreementApply_(state, command, actor) {
   if (command.type === "RESPOND") {
     if (next.pending.status !== "pending") throw new Error("La propuesta fue rechazada.");
     if (!["accept", "reject"].includes(command.decision)) throw new Error("Decisión inválida.");
-    const person = next.pending.participants.find((p) => p.personId === actor.id);
+    const person = next.pending.participants.find((p) => p.personId === actor.personId);
     if (!person) throw new Error("Solo el participante involucrado puede responder.");
     if (person.decision !== "pending") throw new Error("El integrante ya respondió.");
     person.decision = command.decision === "accept" ? "accepted" : "rejected";

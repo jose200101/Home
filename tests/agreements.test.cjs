@@ -7,9 +7,9 @@ const c = vm.createContext({ Set, JSON, Number, String, Array, Object, Math });
 const filename = path.join(__dirname, "../dist/Backend/domain/AgreementRules.js");
 vm.runInContext(fs.readFileSync(filename, "utf8"), c, { filename });
 const admin = { id: "admin", active: true, admin: true };
-const ana = { id: "ana", active: true };
-const carlos = { id: "carlos", active: true };
-const maria = { id: "maria", active: true };
+const ana = { id: "user_ana", personId: "ana", active: true };
+const carlos = { id: "user_carlos", personId: "carlos", active: true };
+const maria = { id: "user_maria", personId: "maria", active: true };
 const apply = (s, action, actor) => c.homeAgreementApply_(s, action, actor);
 const proposal = (participants = ["ana", "carlos"]) => ({
   kind: "recurring", resourceId: "energia", mode: "equal",
@@ -127,4 +127,13 @@ test("gasto rechazado requiere reenviar versión; gasto aprobado requiere correc
   s = answer(answer(s, ana), maria);
   assert.equal(c.homeAgreementCanActivate_(s), true);
   assert.throws(() => start(s, p, ana), /corrección/);
+});
+
+test("identidad de cuenta no sustituye el vínculo explícito con integrante", () => {
+  const s = start(null, proposal());
+  assert.throws(() => answer(s, { id: "ana", active: true }), /involucrado/);
+  assert.throws(() => answer(s, { id: "user_ana", personId: "maria", active: true }), /involucrado/);
+  const updated = answer(s, ana);
+  assert.equal(updated.pending.participants[0].decision, "accepted");
+  assert.equal(updated.pending.createdBy, "admin");
 });

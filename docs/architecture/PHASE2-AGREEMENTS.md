@@ -23,3 +23,5 @@ Salida GAS: Backend/domain/AgreementRules.js
 **Límite:** todavía no conecta HOME_EVENTOS, no guarda movimientos ni genera obligaciones. La vinculación con los eventos y los saldos será un módulo posterior con pruebas propias.
 
 **Aportes fijos recurrentes:** cuando la factura real difiera del total fijo aceptado deberá revisarse la distribución; nunca cambiar importes silenciosamente.
+
+**Identidad:** actor.id es el ID de la cuenta autenticada; actor.personId debe resolverse en el servidor mediante la vinculación explícita usuario-integrante. Las respuestas se autorizan contra personId, nunca contra el ID del usuario ni contra un nombre textual. El pagador de una compra ocasional se valida igualmente mediante personId.
