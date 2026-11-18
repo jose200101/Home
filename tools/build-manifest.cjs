@@ -103,6 +103,10 @@ module.exports = [
     "Frontend/views/PrestamosSolicitar.html"
   ],
   [
+    "src/server/domain/agreements/AgreementRules.js",
+    "Backend/domain/AgreementRules.js"
+  ],
+  [
     "src/gas/appsscript.json",
     "appsscript.json"
   ]
