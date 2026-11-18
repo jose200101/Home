@@ -314,7 +314,7 @@ test("esquema inválido falla sin escribir; lecturas y previsualización no crea
   assert.equal(sh.getLastRow(), 1);
 });
 test("backend completo compila y todos los endpoints históricos están protegidos", () => {
-  const root = path.join(__dirname, "../Backend");
+  const root = path.join(__dirname, "../dist/Backend");
   const files = [];
   const walk = (dir) => {
     for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -349,7 +349,7 @@ test("abonos históricos rechazan montos negativos, gasto ausente, exceso y fech
     c = h.context;
   vm.runInContext(
     fs.readFileSync(
-      path.join(__dirname, "../Backend/GastosVariables.js"),
+      path.join(__dirname, "../dist/Backend/GastosVariables.js"),
       "utf8",
     ),
     c,
@@ -407,7 +407,7 @@ test("wrappers históricos verifican sesión antes de llamar implementación pri
     c = h.context;
   vm.runInContext(
     fs.readFileSync(
-      path.join(__dirname, "../Backend/LegacyEndpoints.js"),
+      path.join(__dirname, "../dist/Backend/LegacyEndpoints.js"),
       "utf8",
     ),
     c,
@@ -435,7 +435,7 @@ test("login reconoce el encabezado real nombre_persona y rechaza estado vacío",
   const h = createHarness(),
     c = h.context;
   vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../Backend/Code.js"), "utf8"),
+    fs.readFileSync(path.join(__dirname, "../dist/Backend/Code.js"), "utf8"),
     c,
   );
   let status = "Activo";

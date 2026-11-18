@@ -2,18 +2,17 @@
  * env
  * Configuración centralizada (IDs y nombres de hojas).
  *
- * RECOMENDADO:
- *  - Define una Script Property llamada SPREADSHEET_ID (Project Settings → Script Properties)
- *    para no tocar código al cambiar de archivo.
- *  - Si prefieres, pega aquí el ID del Spreadsheet (entre /d/ y /edit en la URL).
+ * SPREADSHEET_ID es obligatorio en Script Properties de cada proyecto.
+ * No se usan IDs predeterminados ni el Spreadsheet activo como respaldo.
  */
 function env_() {
   const propsId = String(PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID") || "").trim();
+  if (!propsId || !/^[A-Za-z0-9_-]+$/.test(propsId)) {
+    throw new Error("Configura SPREADSHEET_ID en Script Properties con el ID explícito del Spreadsheet de este entorno.");
+  }
 
   return {
-    // ID BASE DE DATOS (Spreadsheet ID)
-    // Ejemplo: "1eypazsZ5hyN8fe99OxVcZs7AoaYEv...."
-    ID_DATABASE: propsId || "1eypazsZ5hyN8fe99OxVcZs7AoaYEvu21mh94hQhG12s",
+    ID_DATABASE: propsId,
 
     // HOJA REGISTRO USUARIOS (en tu captura: "USUARIOS")
     SH_REGISTRO_USUARIOS: "USUARIOS",

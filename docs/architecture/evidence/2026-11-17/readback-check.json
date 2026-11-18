@@ -1,0 +1,13 @@
+{
+  "versionNumber": 3,
+  "files": 26,
+  "matching": 26,
+  "failures": [],
+  "noQaVerifier": true,
+  "webapp": {
+    "executeAs": "USER_DEPLOYING",
+    "access": "MYSELF"
+  },
+  "timeZone": "America/Tegucigalpa",
+  "status": "PASS"
+}

@@ -1,0 +1,23 @@
+name: HOME CI
+
+on:
+  push:
+    branches:
+      - main
+      - "refactor/**"
+  pull_request:
+
+jobs:
+  structure-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Private deployment policy
+        run: npm run check:deployment
+      - name: Build and tests
+        run: npm test
+      - name: Smoke test (preview and RPC)
+        run: npm run smoke

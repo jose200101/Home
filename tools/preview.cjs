@@ -3,7 +3,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHarness } = require("./harness.cjs");
-const root = path.resolve(__dirname, "..");
+const root = path.resolve(__dirname, "../dist");
 const h = createHarness();
 const [ana, luis, maria] = h.seed();
 const participants = (people) => people.map((p) => ({ personId: p.id }));

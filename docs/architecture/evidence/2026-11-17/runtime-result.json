@@ -1,0 +1,64 @@
+{
+  "tests": [
+    {
+      "name": "destinos e identidad exclusivos QA",
+      "status": "PASS"
+    },
+    {
+      "name": "doGet y evaluación de plantillas HTML",
+      "status": "PASS"
+    },
+    {
+      "name": "inclusiones HTML con subcarpetas",
+      "status": "PASS"
+    },
+    {
+      "name": "lectura real de Sheets y fixtures",
+      "status": "PASS"
+    },
+    {
+      "name": "token inválido rechazado",
+      "status": "PASS"
+    },
+    {
+      "name": "cuenta ficticia inactiva rechazada",
+      "status": "PASS"
+    },
+    {
+      "name": "sesiones ficticias y roles",
+      "status": "PASS"
+    },
+    {
+      "name": "integrante no puede inicializar",
+      "status": "PASS"
+    },
+    {
+      "name": "endpoints históricos deniegan al integrante",
+      "status": "PASS"
+    },
+    {
+      "name": "inicialización administrativa",
+      "status": "PASS"
+    },
+    {
+      "name": "idempotencia real sin segunda escritura",
+      "status": "PASS"
+    },
+    {
+      "name": "privacidad del integrante",
+      "status": "PASS"
+    },
+    {
+      "name": "ausencia de movimientos financieros QA",
+      "status": "PASS"
+    },
+    {
+      "name": "cierre de sesión invalida token",
+      "status": "PASS"
+    }
+  ],
+  "status": "PASS",
+  "redactions": [
+    "Identificadores de entorno y cuenta omitidos; resultados del log real conservados."
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "status": 200,
+  "finalHost": "accounts.google.com",
+  "finalPath": "/v3/signin/identifier",
+  "appRootVisible": false,
+  "googleSignIn": true
+}
