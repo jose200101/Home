@@ -44,21 +44,7 @@ function homeRead_() {
     .map((r) => {
       try {
         const data = JSON.parse(r[4]);
-        if (
-          data.schema !== HOME_SCHEMA_ ||
-          [
-            "INIT",
-            "PERSON",
-            "TEMPLATE",
-            "CHARGE",
-            "DEBT",
-            "PAYMENT",
-            "CONFIRM",
-            "REJECT",
-            "FUND",
-            "VOID",
-          ].indexOf(String(r[3])) < 0
-        )
+        if (!homeEventSupported_(String(r[3]), data))
           throw new Error("Versión desconocida.");
         return {
           id: String(r[0]),
@@ -172,6 +158,7 @@ function homeProject_(events) {
     charges: [],
     payments: [],
     audit: [],
+    agreements: [],
   };
   const people = {},
     templates = {},
@@ -189,6 +176,10 @@ function homeProject_(events) {
       voided: voided.has(e.id),
     });
     if (voided.has(e.id)) return;
+    if (homeIsAgreementType_(e.type)) {
+      homeAgreementReplay_(state.agreements, e);
+      return;
+    }
     if (e.type === "INIT") {
       state.initialized = true;
       state.household = d.name;
@@ -317,6 +308,7 @@ function homeVisible_(state, session) {
     admin: session.admin,
     me: me ? me.id : "",
     today: homeToday_(),
+    agreements: homeAgreementsVisible_(state, session),
   });
   if (!session.admin) {
     const id = me ? me.id : "__unlinked__";
@@ -355,6 +347,7 @@ function homeGetState(token) {
 function homeCommand_(request, state, events, session) {
   const type = request.type;
   const p = request.payload || {};
+  if (homeIsAgreementType_(type)) return homeAgreementCommand_(request, state, session);
   if (!session.admin && ["PAYMENT", "CONFIRM", "REJECT"].indexOf(type) < 0)
     throw new Error("Esta operación requiere administrador.");
   if (!state.initialized && type !== "INIT")
@@ -422,7 +415,8 @@ function homeCommand_(request, state, events, session) {
     )
       throw new Error("Ya existe una factura de este gasto en ese período.");
     const cents = homeCents_(p.amount);
-    const participants = p.participants || template.participants;
+    const agreement = homeAgreementChargeTerms_(state, p, cents);
+    const participants = agreement ? agreement.participants : p.participants || template.participants;
     participants.forEach((v) => homePerson_(state, v.personId, true));
     const payerId = p.payerId ? homePerson_(state, p.payerId, true).id : "";
     const date = homeDate_(p.date),
@@ -442,8 +436,9 @@ function homeCommand_(request, state, events, session) {
       due,
       cents,
       payerId,
-      mode: p.mode || template.mode,
-      shares: homeSplit_(cents, participants, p.mode || template.mode),
+      mode: agreement ? agreement.mode : p.mode || template.mode,
+      shares: homeSplit_(cents, participants, agreement ? agreement.mode : p.mode || template.mode),
+      ...(agreement ? {agreementVersion: agreement.version} : {}),
     };
   }
   if (type === "DEBT") {
@@ -574,12 +569,15 @@ function homeCommand_(request, state, events, session) {
 }
 
 function homeExecute(token, request) {
-  const session = homeSession_(token);
+  let session = homeSession_(token);
+  if (request && homeIsAgreementType_(request.type) && typeof request.id !== "string")
+    throw new Error("Identificador de operación inválido.");
   if (!request || !/^[a-zA-Z0-9_-]{12,100}$/.test(String(request.id || "")))
     throw new Error("Identificador de operación inválido.");
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
+    if (homeIsAgreementType_(request.type)) session = homeSession_(token);
     const events = homeRead_();
     const previous = events.find((e) => e.id === request.id);
     if (previous) {
@@ -598,7 +596,7 @@ function homeExecute(token, request) {
     }
     const state = homeProject_(events);
     const data = homeCommand_(request, state, events, session);
-    data.schema = HOME_SCHEMA_;
+    data.schema = homeIsAgreementType_(request.type) ? HOME_AGREEMENT_SCHEMA_ : HOME_SCHEMA_;
     data.requestJson = JSON.stringify(request.payload || {});
     const event = {
       id: request.id,
