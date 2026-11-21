@@ -98,7 +98,7 @@ function createHarness() {
     },
     SpreadsheetApp: { flush: () => {} },
   });
-  for (const name of ["HomeLedger.js", "HomeAccess.js"])
+  for (const name of ["domain/AgreementRules.js", "AgreementEvents.js", "HomeLedger.js", "HomeAccess.js"])
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../dist/Backend", name), "utf8"),
       context,

@@ -107,6 +107,10 @@ module.exports = [
     "Backend/domain/AgreementRules.js"
   ],
   [
+    "src/server/modules/home/AgreementEvents.js",
+    "Backend/AgreementEvents.js"
+  ],
+  [
     "src/gas/appsscript.json",
     "appsscript.json"
   ]
