@@ -113,5 +113,9 @@ module.exports = [
   [
     "src/gas/appsscript.json",
     "appsscript.json"
+  ],
+  [
+    "src/server/modules/home/ExpenseEvents.js",
+    "Backend/ExpenseEvents.js"
   ]
 ];

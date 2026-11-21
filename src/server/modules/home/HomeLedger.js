@@ -145,6 +145,33 @@ function homeSplit_(total, participants, mode) {
   }));
 }
 
+function homeAddChargeObligations_(obligations, charge) {
+  charge.shares.forEach((share, index) => {
+    if (charge.payerId === share.personId || !share.cents) return;
+    const id = charge.id + ":" + index;
+    obligations[id] = {
+      id,
+      sourceId: charge.id,
+      kind: "charge",
+      name: charge.name,
+      period: charge.period,
+      date: charge.date,
+      due: charge.due,
+      debtorId: share.personId,
+      creditorId: charge.payerId || "",
+      cents: share.cents,
+      paid: 0,
+      reserved: 0,
+      pending: share.cents,
+      ...(charge.expenseKind ? {
+        expenseKind: charge.expenseKind,
+        agreementVersion: charge.agreementVersion,
+        resourceId: charge.resourceId,
+      } : {}),
+    };
+  });
+}
+
 function homeProject_(events) {
   const voided = new Set(
     events.filter((e) => e.type === "VOID").map((e) => e.data.targetId),
@@ -159,6 +186,7 @@ function homeProject_(events) {
     payments: [],
     audit: [],
     agreements: [],
+    expenseResources: [],
   };
   const people = {},
     templates = {},
@@ -176,6 +204,10 @@ function homeProject_(events) {
       voided: voided.has(e.id),
     });
     if (voided.has(e.id)) return;
+    if (homeIsExpenseType_(e.type)) {
+      homeExpenseReplay_(state, obligations, e, d);
+      return;
+    }
     if (homeIsAgreementType_(e.type)) {
       homeAgreementReplay_(state.agreements, e);
       return;
@@ -187,26 +219,9 @@ function homeProject_(events) {
     if (e.type === "PERSON") people[d.id] = Object.assign({}, d);
     if (e.type === "TEMPLATE") templates[d.id] = Object.assign({}, d);
     if (e.type === "CHARGE") {
-      state.charges.push(Object.assign({ id: e.id }, d));
-      d.shares.forEach((s, i) => {
-        if (d.payerId === s.personId || !s.cents) return;
-        const id = e.id + ":" + i;
-        obligations[id] = {
-          id,
-          sourceId: e.id,
-          kind: "charge",
-          name: d.name,
-          period: d.period,
-          date: d.date,
-          due: d.due,
-          debtorId: s.personId,
-          creditorId: d.payerId || "",
-          cents: s.cents,
-          paid: 0,
-          reserved: 0,
-          pending: s.cents,
-        };
-      });
+      const charge = Object.assign({ id: e.id }, d);
+      state.charges.push(charge);
+      homeAddChargeObligations_(obligations, charge);
     }
     if (e.type === "DEBT")
       obligations[e.id] = {
@@ -310,21 +325,24 @@ function homeVisible_(state, session) {
     today: homeToday_(),
     agreements: homeAgreementsVisible_(state, session),
   });
+  result.expenseResources = homeExpenseResourcesVisible_(state, result.agreements);
   if (!session.admin) {
     const id = me ? me.id : "__unlinked__";
+    const linked = state.expenseResources.length ? homeAgreementMember_(state, session, false) : null;
+    const personId = (item) => item.expenseKind && linked ? linked.id : id;
     result.obligations = state.obligations.filter(
-      (o) => o.debtorId === id || o.creditorId === id,
+      (o) => o.debtorId === personId(o) || o.creditorId === personId(o),
     );
     result.payments = state.payments.filter(
       (p) => p.debtorId === id || p.creditorId === id,
     );
     result.charges = state.charges
       .filter(
-        (c) => c.shares.some((s) => s.personId === id) || c.payerId === id,
+        (c) => c.shares.some((s) => s.personId === personId(c)) || c.payerId === personId(c),
       )
       .map((c) =>
         Object.assign({}, c, {
-          shares: c.shares.filter((s) => s.personId === id),
+          shares: c.shares.filter((s) => s.personId === personId(c)),
         }),
       );
     result.templates = [];
@@ -335,7 +353,7 @@ function homeVisible_(state, session) {
       active: p.active,
     }));
     result.plan = []; // Un neteo global podría revelar deudas de terceros.
-  } else result.plan = homePlan_(state.obligations);
+  } else result.plan = homePlan_(state.obligations.filter((item) => !item.expenseKind));
   return result;
 }
 
@@ -347,7 +365,15 @@ function homeGetState(token) {
 function homeCommand_(request, state, events, session) {
   const type = request.type;
   const p = request.payload || {};
-  if (homeIsAgreementType_(type)) return homeAgreementCommand_(request, state, session);
+  if (homeIsExpenseType_(type)) return homeExpenseCommand_(request, state, events, session);
+  if (homeIsAgreementType_(type)) {
+    const resource = homeExpenseResource_(state, type === "AGREEMENT_PROPOSE"
+      ? p.proposal && p.proposal.resourceId : p.resourceId);
+    if (resource && (type === "AGREEMENT_PROPOSE" ||
+        (type === "AGREEMENT_RESPOND" && resource.kind === "occasional")))
+      throw new Error("Usa la operación de gastos correspondiente.");
+    return homeAgreementCommand_(request, state, session);
+  }
   if (!session.admin && ["PAYMENT", "CONFIRM", "REJECT"].indexOf(type) < 0)
     throw new Error("Esta operación requiere administrador.");
   if (!state.initialized && type !== "INIT")
@@ -462,6 +488,7 @@ function homeCommand_(request, state, events, session) {
   if (type === "PAYMENT") {
     const ob = state.obligations.find((o) => o.id === p.obligationId);
     if (!ob) throw new Error("La obligación no existe.");
+    if (ob.expenseKind) throw new Error("Los abonos de este gasto aún no están habilitados.");
     const me = state.people.find(
       (person) => person.userId === session.id && person.active,
     );
@@ -513,6 +540,7 @@ function homeCommand_(request, state, events, session) {
     const charge = state.charges.find((c) => c.id === p.chargeId);
     if (
       !charge ||
+      charge.expenseKind ||
       charge.payerId ||
       events.some((e) => e.type === "FUND" && e.data.chargeId === charge.id)
     )
@@ -570,14 +598,16 @@ function homeCommand_(request, state, events, session) {
 
 function homeExecute(token, request) {
   let session = homeSession_(token);
-  if (request && homeIsAgreementType_(request.type) && typeof request.id !== "string")
+  const expense = request && homeIsExpenseType_(request.type);
+  const agreement = request && homeIsAgreementType_(request.type);
+  if ((expense || agreement) && typeof request.id !== "string")
     throw new Error("Identificador de operación inválido.");
   if (!request || !/^[a-zA-Z0-9_-]{12,100}$/.test(String(request.id || "")))
     throw new Error("Identificador de operación inválido.");
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    if (homeIsAgreementType_(request.type)) session = homeSession_(token);
+    if (expense || agreement) session = homeSession_(token);
     const events = homeRead_();
     const previous = events.find((e) => e.id === request.id);
     if (previous) {
@@ -596,7 +626,8 @@ function homeExecute(token, request) {
     }
     const state = homeProject_(events);
     const data = homeCommand_(request, state, events, session);
-    data.schema = homeIsAgreementType_(request.type) ? HOME_AGREEMENT_SCHEMA_ : HOME_SCHEMA_;
+    data.schema = expense ? HOME_EXPENSE_SCHEMA_ : agreement ? HOME_AGREEMENT_SCHEMA_ : HOME_SCHEMA_;
+    if (expense) data.eventVersion = 1;
     data.requestJson = JSON.stringify(request.payload || {});
     const event = {
       id: request.id,

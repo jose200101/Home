@@ -698,7 +698,9 @@
                               Vence {c.due} ·{" "}
                               {c.payerId
                                 ? "Pagó " + name(c.payerId)
-                                : "Ver estado de aportes abajo"}
+                                : c.expenseKind
+                                  ? "Pendiente de pago al proveedor"
+                                  : "Ver estado de aportes abajo"}
                             </small>
                           </div>
                           <strong>{homeMoney(c.cents)}</strong>
@@ -715,6 +717,7 @@
                         </div>
                         <div className="home-actions">
                           {data.admin &&
+                            !c.expenseKind &&
                             !c.payerId &&
                             allObs.some(
                               (o) =>
@@ -729,7 +732,7 @@
                                 Un integrante pagó la factura completa
                               </button>
                             )}
-                          {data.admin && (
+                          {data.admin && !c.expenseKind && (
                             <button
                               className="home-link home-danger"
                               onClick={() =>
@@ -857,7 +860,7 @@
                               )}
                             </td>
                             <td>
-                              {o.pending - o.reserved > 0 &&
+                              {!o.expenseKind && o.pending - o.reserved > 0 &&
                                 (data.admin || data.me === o.debtorId) &&
                                 (!!o.creditorId || data.admin) && (
                                   <button
