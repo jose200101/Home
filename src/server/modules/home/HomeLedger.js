@@ -204,6 +204,10 @@ function homeProject_(events) {
       voided: voided.has(e.id),
     });
     if (voided.has(e.id)) return;
+    if (homeIsReimbursementType_(e.type)) {
+      homeReimbursementReplay_(obligations, payments, e, d);
+      return;
+    }
     if (homeIsExpenseType_(e.type)) {
       homeExpenseReplay_(state, obligations, e, d);
       return;
@@ -243,9 +247,9 @@ function homeProject_(events) {
         { id: e.id, status: d.creditorId ? "pending" : "confirmed" },
         d,
       );
-    if (e.type === "CONFIRM" && payments[d.paymentId])
+    if (e.type === "CONFIRM" && payments[d.paymentId] && !payments[d.paymentId].expenseKind)
       payments[d.paymentId].status = "confirmed";
-    if (e.type === "REJECT" && payments[d.paymentId])
+    if (e.type === "REJECT" && payments[d.paymentId] && !payments[d.paymentId].expenseKind)
       payments[d.paymentId].status = "rejected";
     if (e.type === "FUND") {
       const charge = state.charges.find((c) => c.id === d.chargeId);
@@ -263,16 +267,22 @@ function homeProject_(events) {
     }
   });
   Object.keys(payments).forEach((id) => {
-    const p = payments[id],
-      ob = obligations[p.obligationId];
-    if (ob && p.status === "confirmed") ob.paid += p.cents;
-    if (ob && p.status === "pending") ob.reserved += p.cents;
+    const p = payments[id];
+    if (p.schema === HOME_REIMBURSEMENT_SCHEMA_) return; // Ya aplicado en orden de eventos.
+    const ob = obligations[p.obligationId];
+    if (!ob || ob.expenseKind) return;
+    if (p.status === "confirmed") ob.paid += p.cents;
+    if (p.status === "pending") ob.reserved += p.cents;
   });
   state.people = Object.keys(people).map((id) => people[id]);
   state.templates = Object.keys(templates).map((id) => templates[id]);
   state.obligations = Object.keys(obligations).map((id) => {
     const ob = obligations[id];
     ob.pending = ob.cents - ob.paid;
+    if (ob.expenseKind) {
+      ob.available = ob.pending - ob.reserved;
+      ob.status = ob.pending === 0 ? "settled" : "open";
+    }
     return ob;
   });
   state.payments = Object.keys(payments).map((id) => payments[id]);
@@ -334,7 +344,7 @@ function homeVisible_(state, session) {
       (o) => o.debtorId === personId(o) || o.creditorId === personId(o),
     );
     result.payments = state.payments.filter(
-      (p) => p.debtorId === id || p.creditorId === id,
+      (p) => p.debtorId === personId(p) || p.creditorId === personId(p),
     );
     result.charges = state.charges
       .filter(
@@ -365,6 +375,7 @@ function homeGetState(token) {
 function homeCommand_(request, state, events, session) {
   const type = request.type;
   const p = request.payload || {};
+  if (homeIsReimbursementType_(type)) return homeReimbursementCommand_(request, state, session);
   if (homeIsExpenseType_(type)) return homeExpenseCommand_(request, state, events, session);
   if (homeIsAgreementType_(type)) {
     const resource = homeExpenseResource_(state, type === "AGREEMENT_PROPOSE"
@@ -488,7 +499,7 @@ function homeCommand_(request, state, events, session) {
   if (type === "PAYMENT") {
     const ob = state.obligations.find((o) => o.id === p.obligationId);
     if (!ob) throw new Error("La obligación no existe.");
-    if (ob.expenseKind) throw new Error("Los abonos de este gasto aún no están habilitados.");
+    if (ob.expenseKind) throw new Error("Usa el comando de reembolsos para esta obligación.");
     const me = state.people.find(
       (person) => person.userId === session.id && person.active,
     );
@@ -517,7 +528,7 @@ function homeCommand_(request, state, events, session) {
   }
   if (type === "CONFIRM" || type === "REJECT") {
     const payment = state.payments.find(
-      (v) => v.id === p.paymentId && v.status === "pending",
+      (v) => v.id === p.paymentId && v.status === "pending" && !v.expenseKind,
     );
     if (!payment) throw new Error("El pago ya fue atendido o no existe.");
     const me = state.people.find(
@@ -600,14 +611,15 @@ function homeExecute(token, request) {
   let session = homeSession_(token);
   const expense = request && homeIsExpenseType_(request.type);
   const agreement = request && homeIsAgreementType_(request.type);
-  if ((expense || agreement) && typeof request.id !== "string")
+  const reimbursement = request && homeIsReimbursementType_(request.type);
+  if ((expense || agreement || reimbursement) && typeof request.id !== "string")
     throw new Error("Identificador de operación inválido.");
   if (!request || !/^[a-zA-Z0-9_-]{12,100}$/.test(String(request.id || "")))
     throw new Error("Identificador de operación inválido.");
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    if (expense || agreement) session = homeSession_(token);
+    if (expense || agreement || reimbursement) session = homeSession_(token);
     const events = homeRead_();
     const previous = events.find((e) => e.id === request.id);
     if (previous) {
@@ -617,17 +629,21 @@ function homeExecute(token, request) {
         throw new Error(
           "La operación original ya está registrada. Actualiza las cuentas antes de registrar datos diferentes.",
         );
+      const state = homeProject_(events);
+      if (reimbursement)
+        homeReimbursementAccess_(state, session, previous.type === "REIMBURSEMENT_DECLARE"
+          ? previous.data.debtorId : previous.data.creditorId);
       return {
         ok: true,
         duplicate: true,
         id: previous.id,
-        state: homeVisible_(homeProject_(events), session),
+        state: homeVisible_(state, session),
       };
     }
     const state = homeProject_(events);
     const data = homeCommand_(request, state, events, session);
-    data.schema = expense ? HOME_EXPENSE_SCHEMA_ : agreement ? HOME_AGREEMENT_SCHEMA_ : HOME_SCHEMA_;
-    if (expense) data.eventVersion = 1;
+    data.schema = reimbursement ? HOME_REIMBURSEMENT_SCHEMA_ : expense ? HOME_EXPENSE_SCHEMA_ : agreement ? HOME_AGREEMENT_SCHEMA_ : HOME_SCHEMA_;
+    if (expense || reimbursement) data.eventVersion = 1;
     data.requestJson = JSON.stringify(request.payload || {});
     const event = {
       id: request.id,
@@ -641,6 +657,8 @@ function homeExecute(token, request) {
       throw new Error(
         "La operación es demasiado grande. Reduce el número de participantes.",
       );
+    // Verificar la proyección y privacidad nuevas antes de persistir.
+    const next = reimbursement ? homeVisible_(homeProject_(events.concat([event])), session) : null;
     const ss = conexion_();
     let sh = ss.getSheetByName(HOME_SHEET_);
     if (!sh) {
@@ -654,7 +672,7 @@ function homeExecute(token, request) {
     return {
       ok: true,
       id: event.id,
-      state: homeVisible_(homeProject_(events.concat([event])), session),
+      state: next || homeVisible_(homeProject_(events.concat([event])), session),
     };
   } finally {
     lock.releaseLock();

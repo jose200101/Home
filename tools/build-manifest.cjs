@@ -117,5 +117,9 @@ module.exports = [
   [
     "src/server/modules/home/ExpenseEvents.js",
     "Backend/ExpenseEvents.js"
+  ],
+  [
+    "src/server/modules/home/ReimbursementEvents.js",
+    "Backend/ReimbursementEvents.js"
   ]
 ];
