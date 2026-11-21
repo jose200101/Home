@@ -12,6 +12,9 @@ function homeIsAgreementType_(type) {
 
 function homeEventSupported_(type, data) {
   if (!data || typeof data !== "object") return false;
+  if (homeIsExpenseType_(type)) {
+    return data.schema === HOME_EXPENSE_SCHEMA_ && data.eventVersion === 1;
+  }
   if (homeIsAgreementType_(type)) {
     return (
       data.schema === HOME_AGREEMENT_SCHEMA_ &&
