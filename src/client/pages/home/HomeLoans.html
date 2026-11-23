@@ -1,0 +1,285 @@
+<script>
+  function homeLoanScope(data, selected, period) {
+    const active = data.people.filter((person) => person.active);
+    const me = active.find((person) => person.id === data.me)?.id || "";
+    const subject = (data.admin && selected) || me;
+    const groups = { received: [], sent: [], other: [], history: [] };
+    for (const loan of (data.loans || []).slice().reverse()) {
+      if (data.admin && selected && ![loan.debtorId, loan.creditorId].includes(selected)) continue;
+      if (period && loan.date.slice(0, 7) !== period) continue;
+      const group = loan.status !== "pending" ? "history"
+        : subject === loan.debtorId ? "received" : subject === loan.creditorId ? "sent" : "other";
+      groups[group].push(loan);
+    }
+    return { me, groups, debtors: me ? active.filter((person) => person.id !== me) : [] };
+  }
+
+  function homeLoanActions(loan, me, people) {
+    if (!me || loan.status !== "pending") return [];
+    if (loan.creditorId === me) return ["cancel"];
+    if (loan.debtorId !== me) return [];
+    return people.some((person) => person.id === loan.creditorId && person.active)
+      ? ["accept", "reject"] : ["reject"];
+  }
+
+  function homeLoanRequestPayload(form, debtors, today) {
+    const { debtorId, date, due } = form;
+    const name = form.name.trim();
+    const amount = form.amount.trim().replace(",", ".");
+    if (!debtors.some((person) => person.id === debtorId)) {
+      throw new Error("Selecciona otro integrante activo.");
+    }
+    if (!name || name.length > 500) {
+      throw new Error("Escribe un concepto de hasta 500 caracteres.");
+    }
+    if (!/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0 || Number(amount) > 100000000) {
+      throw new Error("Ingresa un monto entre L 0.01 y L 100,000,000.00, con hasta dos decimales y sin separadores de miles.");
+    }
+    const validDate = (value) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const instant = new Date(value + "T12:00:00Z");
+      return Number.isFinite(instant.getTime()) && instant.toISOString().slice(0, 10) === value;
+    };
+    if (!validDate(date) || date > today) {
+      throw new Error("La fecha del préstamo debe ser válida y no puede ser posterior a hoy.");
+    }
+    if (due && (!validDate(due) || due < date)) {
+      throw new Error("La fecha acordada de pago debe ser igual o posterior a la del préstamo.");
+    }
+    return { debtorId, name, amount, date, ...(due ? { due } : {}) };
+  }
+</script>
+
+<script type="text/babel">
+  const homeLoanStatus = {
+    pending: ["Pendiente", "warning"],
+    accepted: ["Aceptado", "success"],
+    rejected: ["Rechazado", "danger"],
+    cancelled: ["Cancelado", "neutral"],
+  };
+  const homeLoanDecision = {
+    accept: { label: "Aceptar", title: "Aceptar préstamo", confirm: "Confirmar aceptación", notice: "Préstamo aceptado.", detail: "La aceptación creará una deuda por este importe." },
+    reject: { label: "Rechazar", title: "Rechazar préstamo", confirm: "Confirmar rechazo", notice: "Solicitud rechazada.", detail: "La solicitud quedará rechazada y no se creará una deuda." },
+    cancel: { label: "Cancelar solicitud", title: "Cancelar solicitud", confirm: "Confirmar cancelación", notice: "Solicitud cancelada.", detail: "La solicitud quedará cancelada y no se creará una deuda." },
+  };
+  const homeLoanDateFormat = new Intl.DateTimeFormat("es-HN", { dateStyle: "medium", timeZone: "UTC" });
+
+  function HomeLoanDate({ value }) {
+    return <time dateTime={value}>{homeLoanDateFormat.format(new Date(value + "T12:00:00Z"))}</time>;
+  }
+
+  function HomeLoanDetails({ loan, name }) {
+    return <>
+      Acreedor: {name(loan.creditorId)} · Deudor: {name(loan.debtorId)}
+      <br />
+      Fecha del préstamo: <HomeLoanDate value={loan.date} /> · {loan.due
+        ? <>Pago acordado: <HomeLoanDate value={loan.due} /></>
+        : "Sin vencimiento"}
+    </>;
+  }
+
+  function HomeLoanList({ title, empty, loans, people, me, name, onDecision }) {
+    return (
+      <section className="home-panel home-loan-list">
+        <h3>{title}</h3>
+        {!loans.length && <p>{empty}</p>}
+        {loans.map((loan) => {
+          const actions = homeLoanActions(loan, me, people);
+          const [label, tone] = homeLoanStatus[loan.status];
+          return (
+            <article className="home-list-row" key={loan.id} aria-label={loan.name}>
+              <div>
+                <strong>{loan.name}</strong>
+                <small><HomeLoanDetails loan={loan} name={name} /></small>
+                {loan.reason && <small>Motivo: {loan.reason}</small>}
+              </div>
+              <div className="home-right">
+                <strong>{homeMoney(loan.cents)}</strong>
+                <HomeBadge tone={tone}>{label}</HomeBadge>
+                {actions.length > 0 && (
+                  <div className="home-actions">
+                    {actions.map((decision) => (
+                      <button
+                        type="button" key={decision}
+                        className={decision === "accept" ? "home-btn" : "home-btn home-btn-light"}
+                        aria-label={homeLoanDecision[decision].label + ": " + loan.name}
+                        onClick={(event) => onDecision({ loan, decision, trigger: event.currentTarget })}
+                      >
+                        {homeLoanDecision[decision].label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </section>
+    );
+  }
+
+  function HomeLoanDialog({ action, token, today, debtors, me, name, onClose, onResult, returnFocusRef }) {
+    const decision = homeLoanDecision[action.decision];
+    const [form, setForm] = React.useState({ debtorId: "", name: "", amount: "", date: today, due: "", reason: "" });
+    const [payload, setPayload] = React.useState(null);
+    const [busy, setBusy] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const sending = React.useRef(false);
+    const request = React.useRef(null);
+    const firstField = React.useRef(null);
+    const reviewHeading = React.useRef(null);
+    const confirm = React.useRef(null);
+    React.useEffect(() => {
+      if (payload) reviewHeading.current?.focus();
+      else firstField.current?.focus();
+    }, [payload]);
+    React.useEffect(() => {
+      if (error && request.current && !busy) confirm.current?.focus();
+    }, [error, busy]);
+
+    const change = (key) => (event) => {
+      const value = event.target.value;
+      setForm((current) => ({ ...current, [key]: value }));
+    };
+    function edit() {
+      setPayload(null);
+      setError("");
+    }
+    async function submit(event) {
+      event.preventDefault();
+      if (sending.current) return;
+      setError("");
+      if (!payload) {
+        try {
+          setPayload(decision
+            ? { loanId: action.loan.id, decision: action.decision, reason: form.reason.trim() }
+            : homeLoanRequestPayload(form, debtors, today));
+        } catch (err) {
+          setError(err.message);
+        }
+        return;
+      }
+      if (!request.current) {
+        request.current = { id: homeRequestId(), type: decision ? "LOAN_DECIDE" : "LOAN_REQUEST", payload };
+      }
+      sending.current = true;
+      setBusy(true);
+      try {
+        const result = await homeRpc("homeExecute", token, request.current);
+        onResult(result.state, decision?.notice || "Solicitud enviada.");
+      } catch (err) {
+        setError((err.message || String(err)) + " Puedes reintentar este mismo envío sin duplicarlo.");
+      } finally {
+        sending.current = false;
+        setBusy(false);
+      }
+    }
+
+    const reviewedLoan = action.loan || (payload && { ...payload, creditorId: me });
+    return (
+      <HomeDialog
+        title={decision?.title || "Solicitar préstamo"} busy={busy} onClose={onClose}
+        returnFocusRef={returnFocusRef} trigger={action.trigger}
+      >
+        <form onSubmit={submit} aria-busy={busy}>
+          {!payload && (
+            <fieldset className="home-form" disabled={busy}>
+              {decision ? (
+                <>
+                  <div className="home-info" ref={firstField} tabIndex={-1}>
+                    <strong>{action.loan.name} · {homeMoney(action.loan.cents)}</strong>
+                    <br /><HomeLoanDetails loan={action.loan} name={name} />
+                    <p>{decision.detail}</p>
+                  </div>
+                  {action.decision !== "accept" && (
+                    <HomeField label="Motivo (opcional)">
+                      <input type="text" maxLength={500} value={form.reason} onChange={change("reason")} />
+                    </HomeField>
+                  )}
+                </>
+              ) : (
+                <>
+                  <HomeField label="Deudor" hint={"Acreedor: " + name(me)}>
+                    <select ref={firstField} required value={form.debtorId} onChange={change("debtorId")}>
+                      <option value="">Selecciona un integrante</option>
+                      {debtors.map((person) => <option value={person.id} key={person.id}>{person.name}</option>)}
+                    </select>
+                  </HomeField>
+                  <HomeField label="Concepto">
+                    <input type="text" required maxLength={500} value={form.name} onChange={change("name")} />
+                  </HomeField>
+                  <HomeField label="Monto en lempiras" hint="Hasta dos decimales, sin separadores de miles.">
+                    <input required inputMode="decimal" value={form.amount} onChange={change("amount")} />
+                  </HomeField>
+                  <div className="home-form-grid">
+                    <HomeField label="Fecha del préstamo">
+                      <input type="date" required max={today} value={form.date} onChange={change("date")} />
+                    </HomeField>
+                    <HomeField label="Fecha acordada de pago (opcional)">
+                      <input type="date" min={form.date} value={form.due} onChange={change("due")} />
+                    </HomeField>
+                  </div>
+                </>
+              )}
+            </fieldset>
+          )}
+          {payload && (
+            <div className="home-review">
+              <h3 tabIndex={-1} ref={reviewHeading}>Revisa antes de confirmar</h3>
+              <p><strong>{reviewedLoan.name} · {homeMoney(action.loan ? reviewedLoan.cents : Math.round(Number(payload.amount) * 100))}</strong></p>
+              <p><HomeLoanDetails loan={reviewedLoan} name={name} /></p>
+              {payload.reason && <p>Motivo: {payload.reason}</p>}
+              <p>{decision?.detail || "La solicitud quedará pendiente. La deuda solo se creará si el deudor acepta."}</p>
+            </div>
+          )}
+          {error && <HomeNotice>{error}</HomeNotice>}
+          <div className="home-dialog-actions">
+            <button type="button" className="home-btn home-btn-light" disabled={busy}
+              onClick={payload && !request.current ? edit : onClose}>
+              {payload && !request.current ? "Volver a editar" : "Cerrar"}
+            </button>
+            <button type="submit" className="home-btn" disabled={busy} ref={confirm}>
+              {busy ? "Guardando…" : error && request.current ? "Reintentar envío"
+                : payload ? decision?.confirm || "Confirmar y enviar" : "Revisar datos"}
+            </button>
+          </div>
+        </form>
+      </HomeDialog>
+    );
+  }
+
+  function HomeLoans({ data, token, selected, period, name, onState }) {
+    const { me, groups, debtors } = homeLoanScope(data, selected, period);
+    const [action, setAction] = React.useState(null);
+    const [notice, setNotice] = React.useState("");
+    const heading = React.useRef(null);
+    const listProps = { me, people: data.people, name, onDecision: setAction };
+    return (
+      <>
+        <div className="home-section-head">
+          <div>
+            <h2 tabIndex={-1} ref={heading}>Solicitudes de préstamo</h2>
+            <p>La deuda se crea cuando el deudor acepta la solicitud.</p>
+          </div>
+          {debtors.length > 0 && (
+            <button className="home-btn" type="button" onClick={(event) => setAction({ trigger: event.currentTarget })}>
+              Solicitar préstamo
+            </button>
+          )}
+        </div>
+        {!me && <p className="home-info">Vincula tu cuenta a un integrante activo para solicitar préstamos o responder.</p>}
+        {me && !debtors.length && <p className="home-info">Hace falta otro integrante activo para solicitar un préstamo.</p>}
+        {notice && <HomeNotice onDismiss={() => setNotice("")}>{notice}</HomeNotice>}
+        <HomeLoanList title="Solicitudes recibidas" empty="No hay solicitudes recibidas pendientes en esta vista." loans={groups.received} {...listProps} />
+        <HomeLoanList title="Solicitudes enviadas" empty="No hay solicitudes enviadas pendientes en esta vista." loans={groups.sent} {...listProps} />
+        {!!groups.other.length && <HomeLoanList title="Otras solicitudes pendientes" loans={groups.other} {...listProps} />}
+        <HomeLoanList title="Historial de solicitudes" empty="Las solicitudes resueltas aparecerán aquí." loans={groups.history} {...listProps} />
+        {action && <HomeLoanDialog
+          action={action} token={token} today={data.today} debtors={debtors} me={me} name={name}
+          returnFocusRef={heading} onClose={() => setAction(null)}
+          onResult={(state, message) => { onState(state); setNotice(message); setAction(null); }}
+        />}
+      </>
+    );
+  }
+</script>
