@@ -1,5 +1,5 @@
 <script type="text/babel">
-  const { useEffect, useMemo, useState, useRef } = React;
+  const { useEffect, useState, useRef } = React;
 
   /**
    * Wrapper seguro para google.script.run
@@ -69,15 +69,15 @@
           <div className="card-body">
             <div className="brand-ring">
               <div className="brand-logo">
-                <i className="bi bi-scissors fs-1" aria-hidden="true"></i>
+                <i className="bi bi-house-heart fs-1" aria-hidden="true"></i>
               </div>
             </div>
 
-            <h2 className="brand-title">HOME</h2>
+            <h1 className="brand-title">Entrar a Home</h1>
 
             <form onSubmit={handleSubmit} noValidate>
               <div className="mb-3">
-                <label className="form-label">
+                <label className="form-label" htmlFor="home-login-user">
                   <span className="req">*</span>Usuario
                 </label>
                 <div className="input-group">
@@ -86,7 +86,7 @@
                   </span>
                   <input
                     className="form-control auth-input"
-                    value={username}
+                    id="home-login-user" required value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="Usuario"
                     autoComplete="username"
@@ -95,7 +95,7 @@
               </div>
 
               <div className="mb-2">
-                <label className="form-label">
+                <label className="form-label" htmlFor="home-login-password">
                   <span className="req">*</span>Contraseña
                 </label>
                 <div className="input-group">
@@ -105,7 +105,7 @@
                   <input
                     className="form-control auth-input"
                     type={showPass ? "text" : "password"}
-                    value={password}
+                    id="home-login-password" required value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     autoComplete="current-password"
@@ -142,411 +142,143 @@
                 </div>
               ) : null}
 
-              <button className="btn btn-gold w-100" type="submit" disabled={loading}>
-                {loading ? <SpinnerInline label="Verificando..." /> : "INGRESAR"}
+              <button className="home-btn w-100" type="submit" disabled={loading}>
+                {loading ? <SpinnerInline label="Verificando..." /> : "Ingresar"}
               </button>
             </form>
 
-            <div className="divider"></div>
-            <div className="tiny text-center" style={{color:"rgba(255,255,255,.55)"}}>
-              Control de acceso • Google Sheets
-            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  function TopBar({
-    user,
-    section,
-    personasTab,
-    onChangePersonasTab,
-    gastosTab,
-    onChangeGastosTab,
-    prestamosTab,
-    onChangePrestamosTab,
-    onLogout
-  }) {
-    const [menuOpen, setMenuOpen] = useState(false);
-    const wrapRef = useRef(null);
+  const homePages = [
+    { id: "summary", label: "Inicio", icon: "bi-house" },
+    { id: "charges", label: "Gastos", icon: "bi-receipt" },
+    { id: "debts", label: "Préstamos", icon: "bi-arrow-left-right" },
+    { id: "credits", label: "Créditos", icon: "bi-wallet2", secondary: true },
+    { id: "history", label: "Historial", icon: "bi-clock-history", secondary: true },
+    { id: "people", label: "Integrantes", icon: "bi-people", secondary: true },
+    { id: "settings", label: "Configuración", icon: "bi-gear", secondary: true, admin: true },
+  ];
+  const legacyPages = [
+    { id: "legacyPeople", label: "Personas anteriores", icon: "bi-people", views: [
+      ["Personas", PersonasView], ["Usuarios", UsuariosView],
+    ] },
+    { id: "legacyExpenses", label: "Gastos anteriores", icon: "bi-archive", views: [
+      ["Fijos", GastosFijosView], ["Variables", GastosVariablesView], ["Netos", GastosNetosView],
+    ] },
+    { id: "legacyLoans", label: "Préstamos anteriores", icon: "bi-cash-stack", views: [
+      ["Solicitar", PrestamosSolicitarView], ["Otorgar", PrestamosOtorgarView],
+    ] },
+  ];
 
-    const initials = (user?.nombreCompleto || user?.nombre_usuario || "U")
-      .split(" ")
-      .filter(Boolean)
-      .slice(0, 2)
-      .map(s => s[0].toUpperCase())
-      .join("");
-
-    // Cierra el menú cuando cambias de sección/tab o tocas fuera
-    useEffect(() => { setMenuOpen(false); }, [section, personasTab, gastosTab, prestamosTab]);
-
-    useEffect(() => {
-      function onDocPointerDown(e) {
-        if (!menuOpen) return;
-        const el = wrapRef.current;
-        if (el && !el.contains(e.target)) setMenuOpen(false);
-      }
-      document.addEventListener("pointerdown", onDocPointerDown, { passive: true });
-      return () => document.removeEventListener("pointerdown", onDocPointerDown);
-    }, [menuOpen]);
-
+  function HomeNavigationItem({ page, current, onNavigate }) {
     return (
-      <div className="wbs-topbar">
-        <div className="wbs-topbar-inner">
-
-          <div className="wbs-topbar-left">
-            {section === "personas" ? (
-              <div className="nav nav-pills wbs-section-pills" role="tablist" aria-label="Navegación de Personas">
-                <button
-                  type="button"
-                  className={`nav-link ${personasTab === "personas" ? "active" : ""}`}
-                  onClick={() => onChangePersonasTab("personas")}
-                >
-                  Personas
-                </button>
-                <button
-                  type="button"
-                  className={`nav-link ${personasTab === "usuarios" ? "active" : ""}`}
-                  onClick={() => onChangePersonasTab("usuarios")}
-                >
-                  Usuarios
-                </button>
-              </div>
-            ) : section === "gastos" ? (
-              <div className="nav nav-pills wbs-section-pills" role="tablist" aria-label="Navegación de Gastos">
-                <button
-                  type="button"
-                  className={`nav-link ${gastosTab === "fijos" ? "active" : ""}`}
-                  onClick={() => onChangeGastosTab("fijos")}
-                >
-                  Gastos Fijos
-                </button>
-
-                <button
-                  type="button"
-                  className={`nav-link ${gastosTab === "variables" ? "active" : ""}`}
-                  onClick={() => onChangeGastosTab("variables")}
-                >
-                  Gastos Variables
-                </button>
-
-                <button
-                  type="button"
-                  className={`nav-link ${gastosTab === "netos" ? "active" : ""}`}
-                  onClick={() => onChangeGastosTab("netos")}
-                >
-                  Gastos Netos
-                </button>
-              </div>
-            ) : section === "prestamos" ? (
-              <div className="nav nav-pills wbs-section-pills" role="tablist" aria-label="Navegación de Préstamos">
-                <button
-                  type="button"
-                  className={`nav-link ${prestamosTab === "solicitar" ? "active" : ""}`}
-                  onClick={() => onChangePrestamosTab("solicitar")}
-                >
-                  Solicitar
-                </button>
-
-                <button
-                  type="button"
-                  className={`nav-link ${prestamosTab === "otorgar" ? "active" : ""}`}
-                  onClick={() => onChangePrestamosTab("otorgar")}
-                >
-                  Otorgar
-                </button>
-              </div>
-            ) : (
-              <div className="wbs-topbar-title">HOME</div>
-            )}
-          </div>
-
-
-          <div className="wbs-topbar-right">
-            <div className="wbs-user-menu-wrap" ref={wrapRef}>
-              <button
-                type="button"
-                className="wbs-user-pill wbs-user-pill-btn"
-                onClick={() => setMenuOpen(v => !v)}
-                aria-haspopup="menu"
-                aria-expanded={menuOpen ? "true" : "false"}
-                title="Cuenta"
-              >
-                <span className="wbs-user-avatar">{initials}</span>
-                <span className="wbs-user-name">{(user?.nombre_usuario || "user")}</span>
-                <span className="wbs-user-dot" aria-hidden="true"></span>
-                <i className={`bi ${menuOpen ? "bi-chevron-up" : "bi-chevron-down"} wbs-user-caret`} aria-hidden="true"></i>
-              </button>
-
-              {menuOpen ? (
-                <div className="wbs-user-menu" role="menu" aria-label="Menú de usuario">
-                  <div className="wbs-user-menu-row">
-                    <div className="wbs-user-menu-avatar">{initials}</div>
-                    <div className="wbs-user-menu-meta">
-                      <div className="wbs-user-menu-username">{user?.nombre_usuario || "Usuario"}</div>
-                      <div className="wbs-user-menu-fullname">{user?.nombreCompleto || "—"}</div>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="wbs-user-menu-logout"
-                      onClick={() => { setMenuOpen(false); onLogout && onLogout(); }}
-                      title="Cerrar sesión"
-                    >
-                      <i className="bi bi-box-arrow-right"></i>
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function SectionBar({ section, gastosTab, onChangeGastosTab }) {
-    if (section !== "gastos") return null;
-
-    return (
-      <div className="wbs-sectionbar">
-        <div className="wbs-sectionbar-inner">
-          <div className="nav nav-pills wbs-section-pills" role="tablist" aria-label="Navegación de Gastos">
-            <button
-              type="button"
-              className={`nav-link ${gastosTab === "fijos" ? "active" : ""}`}
-              onClick={() => onChangeGastosTab("fijos")}
-            >
-              Gastos Fijos
-            </button>
-
-            <button
-              type="button"
-              className={`nav-link ${gastosTab === "variables" ? "active" : ""}`}
-              onClick={() => onChangeGastosTab("variables")}
-            >
-              Gastos Variables
-            </button>
-
-            <button
-              type="button"
-              className={`nav-link ${gastosTab === "netos" ? "active" : ""}`}
-              onClick={() => onChangeGastosTab("netos")}
-            >
-              Gastos Netos
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function Sidebar({ activeKey, onNavigate, onLogout, admin }) {
-    return (
-      <aside className="wbs-sidebar">
-        <div className="wbs-brand">
-          <div className="wbs-brand-badge">
-            <div><i className="bi bi-house-heart"></i></div>
-          </div>
-          <div className="wbs-brand-title">Home</div>
-          <div className="wbs-brand-sep"></div>
-        </div>
-
-        <div className="wbs-nav px-2">
-          <button
-            className={`wbs-navitem ${activeKey === "inicio" ? "active" : ""}`}
-            onClick={() => onNavigate("inicio")}
-          >
-            <i className="bi bi-house"></i>
-            <span>Mi hogar</span>
-          </button>
-
-          {admin && <><button
-            className={`wbs-navitem ${activeKey === "personas" ? "active" : ""}`}
-            onClick={() => onNavigate("personas")}
-          >
-            <i className="bi bi-people"></i>
-            <span>Personas anteriores</span>
-          </button>
-
-          <button
-            className={`wbs-navitem ${activeKey === "gastos" ? "active" : ""}`}
-            onClick={() => onNavigate("gastos")}
-          >
-            <i className="bi bi-cash-coin"></i>
-            <span>Gastos anteriores</span>
-          </button>
-
-          <button
-            className={`wbs-navitem ${activeKey === "prestamos" ? "active" : ""}`}
-            onClick={() => onNavigate("prestamos")}
-          >
-            <i className="bi bi-cash-stack"></i>
-            <span>Préstamos anteriores</span>
-          </button>
-          </>}
-        </div>
-
-        <div className="mt-auto wbs-nav-footer">
-          <button className="wbs-navitem w-100" onClick={onLogout}>
-            <i className="bi bi-box-arrow-left"></i>
-            <span>Cerrar Sesión</span>
-          </button>
-        </div>
-      </aside>
-    );
-  }
-
-  function MobileNav({ activeKey, onNavigate, admin }) {
-    return (
-      <nav className="wbs-mobile-nav">
-        <button
-          className={`wbs-mnav-item ${activeKey === "inicio" ? "active" : ""}`}
-          onClick={() => onNavigate("inicio")}
-        >
-          <i className="bi bi-house"></i>
-          <div>Mi hogar</div>
-        </button>
-
-        {admin && <><button
-          className={`wbs-mnav-item ${activeKey === "personas" ? "active" : ""}`}
-          onClick={() => onNavigate("personas")}
-        >
-          <i className="bi bi-people"></i>
-          <div>Personas previas</div>
-        </button>
-
-        <button
-          className={`wbs-mnav-item ${activeKey === "gastos" ? "active" : ""}`}
-          onClick={() => onNavigate("gastos")}
-        >
-          <i className="bi bi-cash-coin"></i>
-          <div>Gastos previos</div>
-        </button>
-
-        <button
-          className={`wbs-mnav-item ${activeKey === "prestamos" ? "active" : ""}`}
-          onClick={() => onNavigate("prestamos")}
-        >
-          <i className="bi bi-cash-stack"></i>
-          <div>Préstamos previos</div>
-        </button>
-        </>}
-
-        <button
-          className="wbs-mnav-item"
-          type="button"
-          data-bs-toggle="offcanvas"
-          data-bs-target="#wbsMore"
-          aria-controls="wbsMore"
-        >
-          <i className="bi bi-list"></i>
-          <div>Más</div>
-        </button>
-      </nav>
-    );
-  }
-
-  function MoreOffcanvas({ onLogout }) {
-    return (
-      <div className="offcanvas offcanvas-bottom wbs-more" tabIndex="-1" id="wbsMore" aria-labelledby="wbsMoreLabel">
-        <div className="offcanvas-header">
-          <h5 className="offcanvas-title" id="wbsMoreLabel">Más</h5>
-          <button type="button" className="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
-        </div>
-        <div className="offcanvas-body">
-          <button
-            className="btn btn-outline-dark w-100"
-            onClick={onLogout}
-            data-bs-dismiss="offcanvas"
-          >
-            <i className="bi bi-box-arrow-left me-2"></i>
-            Cerrar Sesión
-          </button>
-        </div>
-      </div>
+      <button type="button" className={"home-nav-item" + (page.secondary ? " home-nav-secondary" : "")}
+        aria-current={current === page.id ? "page" : undefined}
+        onClick={() => onNavigate(page.id)}>
+        <i className={"bi " + page.icon} aria-hidden="true" />
+        <span>{page.label}</span>
+      </button>
     );
   }
 
   function ProtectedApp({ user, token, onLogout }) {
-    const admin = ['admin','administrador','propietario'].includes(String(user?.rol || '').trim().toLowerCase());
-    const [activeKey, setActiveKey] = useState("inicio");
-    const [gastosTab, setGastosTab] = useState("fijos");
-    const [personasTab, setPersonasTab] = useState("personas");
-    const [prestamosTab, setPrestamosTab] = useState("solicitar");
+    const admin = ["admin", "administrador", "propietario"].includes(String(user?.rol || "").trim().toLowerCase());
+    const [page, setPage] = useState("summary");
+    const [ready, setReady] = useState(false);
+    const [more, setMore] = useState(false);
+    const [legacyTab, setLegacyTab] = useState({});
+    const main = useRef(null);
+    const moveFocus = useRef(false);
+    const legacy = admin && legacyPages.find((item) => item.id === page);
+    const visiblePages = homePages.filter((item) =>
+      (ready || item.id === "summary") && (!item.admin || admin));
+    const currentLegacyTab = legacyTab[page] || 0;
+    const LegacyView = legacy ? legacy.views[currentLegacyTab][1] : null;
 
-    function handleNavigate(key) {
-      setActiveKey(key);
-      if (key === "gastos") setGastosTab((prev) => prev || "fijos");
-      if (key === "personas") setPersonasTab((prev) => prev || "personas");
-      if (key === "prestamos") setPrestamosTab((prev) => prev || "solicitar");
-      // Limpieza defensiva (móvil): si queda un backdrop pegado, bloquea los taps
-      try {
-        document.querySelectorAll('.modal-backdrop, .offcanvas-backdrop').forEach(el => el.remove());
-        document.querySelectorAll('.modal.show').forEach(m => {
-          m.classList.remove('show');
-          m.style.display = 'none';
-          m.setAttribute('aria-hidden', 'true');
-          m.removeAttribute('aria-modal');
-        });
-        if (!document.querySelector('.modal.show')) document.body.classList.remove('modal-open');
-      } catch (e) {}
-      // Cierra el offcanvas si está abierto
-      try {
-        const el = document.getElementById("wbsMore");
-        if (el && window.bootstrap?.Offcanvas) {
-          const inst = window.bootstrap.Offcanvas.getInstance(el);
-          if (inst) inst.hide();
-        }
-      } catch (e) {}
+    function navigate(id) {
+      setMore(false);
+      if (id === page) return;
+      moveFocus.current = true;
+      setPage(id);
     }
 
-    const content = useMemo(() => {
-      if (activeKey === "personas") {
-        if (personasTab === "usuarios") return <UsuariosView user={user} />;
-        return <PersonasView user={user} />;
-      }
-      if (activeKey === "gastos") {
-        if (gastosTab === "variables") return <GastosVariablesView user={user} />;
-        if (gastosTab === "netos") return <GastosNetosView user={user} />;
-        return <GastosFijosView user={user} />;
-      }
-      if (activeKey === "prestamos") {
-        if (prestamosTab === "otorgar") return <PrestamosOtorgarView user={user} />;
-        return <PrestamosSolicitarView user={user} />;
-      }
-      return <HomeCuentasView user={user} token={token} />;
-    }, [activeKey, gastosTab, personasTab, prestamosTab, user, token]);
+    useEffect(() => {
+      if (!moveFocus.current) return;
+      moveFocus.current = false;
+      window.scrollTo(0, 0);
+      main.current?.focus({ preventScroll: true });
+    }, [page]);
 
     return (
-      <div className="wbs-layout">
-        <Sidebar
-          admin={admin}
-          activeKey={activeKey}
-          onNavigate={handleNavigate}
-          onLogout={onLogout}
-        />
-
-        <main className="wbs-main">
-          <TopBar
-            user={user}
-            section={activeKey}
-            personasTab={personasTab}
-            onChangePersonasTab={setPersonasTab}
-            gastosTab={gastosTab}
-            onChangeGastosTab={setGastosTab}
-            prestamosTab={prestamosTab}
-            onChangePrestamosTab={setPrestamosTab}
-            onLogout={onLogout}
-          />
-          <div className="wbs-content">
-            {content}
+      <div className="home-layout">
+        <a className="home-skip" href="#home-main">Saltar al contenido</a>
+        <aside className="home-sidebar">
+          <div className="home-brand"><i className="bi bi-house-heart" aria-hidden="true" /> Home</div>
+          <nav className="home-nav" aria-label="Navegación principal">
+            {visiblePages.map((item) => (
+              <HomeNavigationItem key={item.id} page={item} current={page} onNavigate={navigate} />
+            ))}
+            <button type="button" className="home-nav-item home-nav-more"
+              aria-haspopup="dialog" aria-expanded={more}
+              aria-current={legacy || visiblePages.some((item) => item.secondary && item.id === page) ? "location" : undefined}
+              onClick={() => setMore(true)}>
+              <i className="bi bi-three-dots" aria-hidden="true" />
+              <span>Más</span>
+            </button>
+          </nav>
+        </aside>
+        <main id="home-main" ref={main} tabIndex={-1} className="home-main">
+          <div className="home-topbar">
+            <span className="home-topbar-brand"><i className="bi bi-house-heart" aria-hidden="true" /> Home</span>
+            <span className="home-account"><i className="bi bi-person-circle" aria-hidden="true" /> {user?.nombreCompleto || user?.nombre_usuario}</span>
+          </div>
+          <div className="home-content">
+            {legacy ? (
+              <div className="home-legacy">
+                <h1>{legacy.label}</h1>
+                <nav className="home-legacy-nav" aria-label={legacy.label}>
+                  {legacy.views.map(([label], index) => (
+                    <button type="button" key={label} className="home-btn home-btn-light"
+                      aria-current={index === currentLegacyTab ? "page" : undefined}
+                      onClick={() => setLegacyTab((tabs) => ({ ...tabs, [page]: index }))}>
+                      {label}
+                    </button>
+                  ))}
+                </nav>
+                <LegacyView user={user} />
+              </div>
+            ) : (
+              <HomeCuentasView token={token} tab={page} setTab={navigate} onReady={setReady} />
+            )}
           </div>
         </main>
-
-        <MobileNav activeKey={activeKey} onNavigate={handleNavigate} admin={admin} />
-        <MoreOffcanvas onLogout={onLogout} />
+        {more && (
+          <HomeDialog title="Más opciones" onClose={() => setMore(false)}>
+            <div className="home-menu">
+              <nav className="home-menu-secondary" aria-label="Secciones adicionales">
+                {visiblePages.filter((item) => item.secondary).map((item) => (
+                  <HomeNavigationItem key={item.id} page={item} current={page} onNavigate={navigate} />
+                ))}
+              </nav>
+              {admin && (
+                <nav aria-label="Módulos anteriores">
+                  <h3>Módulos anteriores</h3>
+                  {legacyPages.map((item) => (
+                    <HomeNavigationItem key={item.id} page={item} current={page} onNavigate={navigate} />
+                  ))}
+                </nav>
+              )}
+              <button type="button" className="home-nav-item" onClick={onLogout}>
+                <i className="bi bi-box-arrow-right" aria-hidden="true" />
+                <span>Cerrar sesión</span>
+              </button>
+            </div>
+          </HomeDialog>
+        )}
       </div>
     );
   }
@@ -556,20 +288,13 @@
     const [user, setUser] = useState(null);
     const [token, setToken] = useState("");
 
-    // Cambia el tema del body: login (oscuro) vs app (claro)
-    useEffect(() => {
-      if (user) document.body.classList.add("app-mode");
-      else document.body.classList.remove("app-mode");
-      return () => document.body.classList.remove("app-mode");
-    }, [user]);
-
     async function boot() {
       try {
         const t = (localStorage.getItem("APP_TOKEN") || "").trim();
         const uRaw = localStorage.getItem("APP_USER");
         if (!t || !uRaw) return;
 
-        const u = JSON.parse(uRaw);
+        JSON.parse(uRaw);
         const res = await gasCall("validateToken", t);
         if (res && res.ok) {
           setUser(res.user);
@@ -603,8 +328,8 @@
     if (booting) {
       return (
         <div className="auth-wrap">
-          <div className="auth-card">
-            <div className="text-center text-muted">Cargando...</div>
+          <div className="auth-card p-4" role="status">
+            <SpinnerInline label="Cargando sesión…" />
           </div>
         </div>
       );

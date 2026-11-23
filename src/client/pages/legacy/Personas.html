@@ -4,83 +4,6 @@
    * Hoja: PERSONAS
    */
 
-  function bsModalShow(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-
-    // Preferimos Bootstrap JS si está disponible
-    if (window.bootstrap?.Modal) {
-      window.bootstrap.Modal.getOrCreateInstance(el).show();
-      return;
-    }
-
-    // Fallback (sin bootstrap.js): mostrar modal manualmente
-    try {
-      // Bind de botones con data-bs-dismiss="modal"
-      if (!el.dataset.wbsBindDismiss) {
-        el.dataset.wbsBindDismiss = '1';
-        el.addEventListener('click', (ev) => {
-          const btn = ev.target.closest('[data-bs-dismiss="modal"]');
-          if (btn) {
-            ev.preventDefault();
-            bsModalHide(id);
-          }
-        });
-      }
-
-      el.style.display = 'block';
-      el.classList.add('show');
-      el.removeAttribute('aria-hidden');
-      el.setAttribute('aria-modal', 'true');
-      document.body.classList.add('modal-open');
-
-      // Backdrop
-      const bd = document.createElement('div');
-      bd.className = 'modal-backdrop fade show';
-      bd.dataset.modalFor = id;
-      document.body.appendChild(bd);
-
-      // Tap en backdrop cierra
-      bd.addEventListener('click', () => bsModalHide(id));
-
-      // Enfocar primer input para facilitar en móvil
-      setTimeout(() => {
-        const focusable = el.querySelector('input, select, textarea, button');
-        if (focusable && focusable.focus) focusable.focus();
-      }, 50);
-    } catch (e) {
-      // no-op
-    }
-  }
-
-  function bsModalHide(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-
-    if (window.bootstrap?.Modal) {
-      const inst = window.bootstrap.Modal.getInstance(el) || window.bootstrap.Modal.getOrCreateInstance(el);
-      inst.hide();
-      return;
-    }
-
-    try {
-      el.classList.remove('show');
-      el.style.display = 'none';
-      el.setAttribute('aria-hidden', 'true');
-      el.removeAttribute('aria-modal');
-
-      document.querySelectorAll('.modal-backdrop').forEach(bd => {
-        if (bd?.dataset?.modalFor === id) bd.remove();
-      });
-
-      // Quitar modal-open solo si no quedan modales abiertos
-      const anyOpen = document.querySelector('.modal.show');
-      if (!anyOpen) document.body.classList.remove('modal-open');
-    } catch (e) {
-      // no-op
-    }
-  }
-
   function toISODateInput(v) {
     if (!v) return "";
     if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
@@ -127,6 +50,76 @@
 
     const [formMode, setFormMode] = React.useState("create");
     const [form, setForm] = React.useState(emptyForm);
+    const personModal = React.useRef(null);
+    const personName = React.useRef(null);
+    const fallbackBackdrop = React.useRef(null);
+    const personModalTrigger = React.useRef(null);
+
+    function releasePersonModalFocus() {
+      const modal = personModal.current;
+      if (modal.contains(document.activeElement)) document.activeElement.blur();
+      modal.inert = true;
+    }
+
+    function restorePersonModalFocus() {
+      const trigger = personModalTrigger.current;
+      personModalTrigger.current = null;
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    }
+
+    function showPersonModal(trigger) {
+      const modal = personModal.current;
+      personModalTrigger.current = trigger;
+      modal.inert = false;
+
+      if (window.bootstrap?.Modal) {
+        modal.addEventListener("shown.bs.modal", () => personName.current.focus(), { once: true });
+        // Bootstrap deactivates its focus trap after dispatching hide.bs.modal.
+        // Keep focus outside until hidden.bs.modal, when the trap and backdrop are gone.
+        modal.addEventListener("hide.bs.modal", releasePersonModalFocus, { once: true });
+        modal.addEventListener("hidden.bs.modal", restorePersonModalFocus, { once: true });
+        window.bootstrap.Modal.getOrCreateInstance(modal).show(trigger);
+        return;
+      }
+
+      modal.style.display = "block";
+      modal.classList.add("show");
+      modal.removeAttribute("aria-hidden");
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      document.body.classList.add("modal-open");
+
+      const backdrop = document.createElement("div");
+      backdrop.className = "modal-backdrop fade show";
+      fallbackBackdrop.current = backdrop;
+      document.body.appendChild(backdrop);
+      personName.current.focus();
+    }
+
+    function hidePersonModal() {
+      const modal = personModal.current;
+      if (!modal) return;
+      if (window.bootstrap?.Modal) {
+        window.bootstrap.Modal.getInstance(modal)?.hide();
+        return;
+      }
+      if (!fallbackBackdrop.current) return;
+
+      releasePersonModalFocus();
+      modal.classList.remove("show");
+      modal.style.display = "none";
+      modal.setAttribute("aria-hidden", "true");
+      modal.removeAttribute("aria-modal");
+      modal.removeAttribute("role");
+      fallbackBackdrop.current.remove();
+      fallbackBackdrop.current = null;
+      if (!document.querySelector(".modal.show")) document.body.classList.remove("modal-open");
+      restorePersonModalFocus();
+    }
+
+    function dismissWithoutBootstrap() {
+      if (fallbackBackdrop.current) hidePersonModal();
+    }
 
     async function load() {
       setLoading(true);
@@ -155,7 +148,7 @@
         };
         const r = await gasCall("guardarPersona", payload);
         if (!r || !r.ok) throw new Error(r?.message || "No se pudo guardar.");
-        bsModalHide("modalPersona");
+        hidePersonModal();
         setForm(emptyForm);
         setFormMode("create");
         await load();
@@ -166,13 +159,13 @@
       }
     }
 
-    function openCreate() {
+    function openCreate(event) {
       setFormMode("create");
       setForm({ ...emptyForm });
-      bsModalShow("modalPersona");
+      showPersonModal(event.currentTarget);
     }
 
-    function openEdit(p) {
+    function openEdit(p, trigger) {
       setFormMode("edit");
       setForm({
         id_persona: String(p?.id_persona || ""),
@@ -182,7 +175,7 @@
         telefono: String(p?.telefono || ""),
         estado: String(p?.estado || "Activo")
       });
-      bsModalShow("modalPersona");
+      showPersonModal(trigger);
     }
 
     async function onDelete(p) {
@@ -296,7 +289,7 @@
                       </td>
                       <td className="text-end">
                         <div className="btn-group btn-group-sm" role="group">
-                          <button className="btn btn-outline-dark" onClick={() => openEdit(p)} title="Editar">
+                          <button className="btn btn-outline-dark" onClick={(event) => openEdit(p, event.currentTarget)} title="Editar">
                             <i className="bi bi-pencil"></i>
                           </button>
                           <button className="btn btn-outline-danger" onClick={() => onDelete(p)} title="Eliminar">
@@ -320,13 +313,20 @@
         </div>
 
         {/* Modal Persona */}
-        <div className="modal fade" id="modalPersona" tabIndex="-1" aria-hidden="true">
+        <div className="modal fade" id="modalPersona" ref={personModal} tabIndex="-1"
+          aria-hidden="true" aria-labelledby="modalPersonaTitle"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) dismissWithoutBootstrap();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") dismissWithoutBootstrap();
+          }}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content">
               <form onSubmit={onSave}>
                 <div className="modal-header">
-                  <h5 className="modal-title">{formMode === "create" ? "Nueva Persona" : "Editar Persona"}</h5>
-                  <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                  <h5 className="modal-title" id="modalPersonaTitle">{formMode === "create" ? "Nueva Persona" : "Editar Persona"}</h5>
+                  <button type="button" className="btn-close" data-bs-dismiss="modal" onClick={dismissWithoutBootstrap} aria-label="Cerrar"></button>
                 </div>
                 <div className="modal-body">
                   {error && <div className="alert alert-danger">{error}</div>}
@@ -339,9 +339,11 @@
                   )}
 
                   <div className="mb-3">
-                    <label className="form-label"><span className="req">*</span> Nombre</label>
+                    <label className="form-label" htmlFor="modalPersonaName"><span className="req">*</span> Nombre</label>
                     <input
                       className="form-control"
+                      id="modalPersonaName"
+                      ref={personName}
                       value={form.nombre_persona}
                       onChange={(e) => setForm(prev => ({ ...prev, nombre_persona: e.target.value }))}
                       required
@@ -397,7 +399,7 @@
                   </div>
                 </div>
                 <div className="modal-footer">
-                  <button type="button" className="btn btn-outline-dark" data-bs-dismiss="modal">Cancelar</button>
+                  <button type="button" className="btn btn-outline-dark" data-bs-dismiss="modal" onClick={dismissWithoutBootstrap}>Cancelar</button>
                   <button type="submit" className="btn btn-dark" disabled={saving}>
                     {saving ? <SpinnerInline label="Guardando" /> : "Guardar"}
                   </button>
