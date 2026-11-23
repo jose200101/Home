@@ -77,6 +77,7 @@ module.exports = [
   ["src/client/pages/home/HomeLoans.html", "Frontend/views/HomeLoans.html"],
   ["src/client/pages/home/HomeReimbursements.html", "Frontend/views/HomeReimbursements.html"],
   ["src/client/pages/home/HomeCredits.html", "Frontend/views/HomeCredits.html"],
+  ["src/client/pages/home/HomeCorrections.html", "Frontend/views/HomeCorrections.html"],
   [
     "src/client/pages/legacy/Inicio.html",
     "Frontend/views/Inicio.html"

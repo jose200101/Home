@@ -1,0 +1,254 @@
+<script>
+  function homeCorrectionAmount(raw) {
+    const amount = raw.trim().replace(",", ".");
+    if (!/^\d+(\.\d{1,2})?$/.test(amount)) return null;
+    const [whole, fraction = ""] = amount.split(".");
+    const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+    return cents <= 10000000000 ? { amount, cents } : null;
+  }
+
+  function homeCorrectionPayload(action, form) {
+    const reason = form.reason.trim();
+    if (action.correction) {
+      const { correction, kind } = action;
+      if (!correction.canDecide) throw new Error("Esta corrección no está disponible para responder.");
+      if (kind === "reject" && (!reason || reason.length > 500))
+        throw new Error("Escribe un motivo de rechazo de hasta 500 caracteres.");
+      return { correctionId: correction.id, version: correction.version, decision: kind,
+        ...(kind === "reject" ? { reason } : {}) };
+    }
+    const ob = action.obligation;
+    if (!ob.correctionOffer || ob.correctionOffer.blocked)
+      throw new Error(ob.correctionOffer?.blocked || "La obligación no está disponible para corregir.");
+    const parsed = homeCorrectionAmount(form.amount);
+    if (!parsed) throw new Error("Ingresa un importe válido entre L 0.00 y L 100,000,000.00, con hasta dos decimales.");
+    if (parsed.cents === (ob.effectiveCents ?? ob.cents)) throw new Error("El nuevo importe debe ser distinto del importe actual.");
+    if (parsed.cents < ob.correctionOffer.minimum) throw new Error("El importe no puede ser inferior al crédito ya aplicado.");
+    if (!reason || reason.length > 500) throw new Error("Escribe un motivo de hasta 500 caracteres.");
+    return { obligationId: ob.id, amount: parsed.amount, expectedVersion: ob.correctionVersion || 0, reason };
+  }
+</script>
+
+<script type="text/babel">
+  const homeCorrectionActions = {
+    propose: { title: "Proponer corrección", confirm: "Enviar propuesta", notice: "Propuesta enviada.",
+      detail: "El importe actual se mantiene hasta que el deudor y el acreedor aprueben." },
+    accept: { title: "Aprobar corrección", confirm: "Confirmar aprobación", notice: "Aprobación registrada.",
+      detail: "Si esta es la segunda aprobación, se aplicará el importe corregido." },
+    reject: { title: "Rechazar corrección", confirm: "Confirmar rechazo", notice: "Corrección rechazada.",
+      detail: "El rechazo cierra la propuesta y conserva el importe vigente." },
+  };
+  const homeCorrectionState = { pending: ["Pendiente", "warning"], accepted: ["Aprobada", "success"], rejected: ["Rechazada", "danger"] };
+  const homeCorrectionDifference = (value) => (value > 0 ? "+" : "") + homeMoney(value);
+  const homeCorrectionTimestamp = (value) => new Date(value).toLocaleString("es-HN", {
+    timeZone: "America/Tegucigalpa", dateStyle: "medium", timeStyle: "short",
+  });
+
+  function HomeCorrectionAmounts({ original, previous, proposed }) {
+    return (
+      <dl className="home-reimbursement-balances">
+        <div><dt>Principal histórico</dt><dd>{homeMoney(original)}</dd></div>
+        <div><dt>Importe {proposed == null ? "vigente" : "anterior"}</dt><dd>{homeMoney(previous)}</dd></div>
+        {proposed != null && <>
+          <div><dt>Importe propuesto</dt><dd>{homeMoney(proposed)}</dd></div>
+          <div><dt>Diferencia</dt><dd>{homeCorrectionDifference(proposed - previous)}</dd></div>
+        </>}
+      </dl>
+    );
+  }
+
+  function HomeCorrectionDialog({ action, token, name, fallback, onClose, onResult }) {
+    const { kind, obligation: ob, correction, label, trigger } = action;
+    const copy = homeCorrectionActions[kind];
+    const [form, setForm] = React.useState({ amount: "", reason: "" });
+    const [payload, setPayload] = React.useState(null);
+    const [busy, setBusy] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const envelope = React.useRef(null);
+    const sending = React.useRef(false);
+    const first = React.useRef(null);
+    const summary = React.useRef(null);
+    const confirm = React.useRef(null);
+    React.useEffect(() => { (payload ? summary : first).current?.focus(); }, [payload]);
+    React.useEffect(() => { if (error && envelope.current && !busy) confirm.current?.focus(); }, [error, busy]);
+    const change = (key) => (event) => {
+      const value = event.target.value;
+      setForm((previous) => ({ ...previous, [key]: value }));
+    };
+    async function submit(event) {
+      event.preventDefault();
+      if (sending.current) return;
+      setError("");
+      if (!payload) {
+        try { setPayload(homeCorrectionPayload(action, form)); }
+        catch (err) { setError(err.message); }
+        return;
+      }
+      if (!envelope.current) envelope.current = {
+        id: homeRequestId(), type: correction ? "CORRECTION_DECIDE" : "CORRECTION_PROPOSE", payload,
+      };
+      sending.current = true;
+      setBusy(true);
+      try {
+        const result = await homeRpc("homeExecute", token, envelope.current);
+        const updated = kind === "accept" && result.state.corrections.find((entry) => entry.id === correction.id);
+        onResult(result.state, updated?.status === "accepted" ? "Corrección aprobada y aplicada." : copy.notice);
+      } catch (err) {
+        setError((err.message || String(err)) + " Puedes reintentar este mismo envío sin duplicarlo.");
+      } finally {
+        sending.current = false;
+        setBusy(false);
+      }
+    }
+    const entry = correction || ob;
+    const previous = correction ? correction.previousCents : ob.effectiveCents ?? ob.cents;
+    const original = correction ? correction.originalCents : ob.cents;
+    const proposed = correction ? correction.proposedCents : homeCorrectionAmount(form.amount)?.cents;
+    const amounts = <HomeCorrectionAmounts original={original} previous={previous} proposed={proposed} />;
+    const parties = <>Deudor: {name(entry.debtorId)} · Acreedor: {name(entry.creditorId)}</>;
+    return (
+      <HomeDialog title={copy.title} busy={busy} trigger={trigger} returnFocusRef={fallback} onClose={onClose}>
+        <form onSubmit={submit} aria-busy={busy}>
+          {!payload ? (
+            <fieldset className="home-form">
+              <div className="home-info" ref={kind === "accept" ? first : undefined} tabIndex={kind === "accept" ? -1 : undefined}>
+                <strong>{label}</strong><br />{parties}
+                {correction && <><br />Versión {correction.version} · {correction.reason}</>}
+                {amounts}
+              </div>
+              {!correction && <HomeField label="Nuevo importe total en lempiras"
+                hint={ob.correctionOffer.minimum > 0 ? "Mínimo por crédito aplicado: " + homeMoney(ob.correctionOffer.minimum) : "Puedes ingresar cero si corresponde."}>
+                <input ref={first} required inputMode="decimal" value={form.amount} onChange={change("amount")} />
+              </HomeField>}
+              {kind !== "accept" && <HomeField label={correction ? "Motivo del rechazo" : "Motivo de la corrección"}>
+                <input ref={correction ? first : undefined} required maxLength={500} value={form.reason} onChange={change("reason")} />
+              </HomeField>}
+            </fieldset>
+          ) : (
+            <div className="home-review">
+              <h3 ref={summary} tabIndex={-1}>Revisa antes de confirmar</h3>
+              <p><strong>{label}</strong></p><p>{parties}</p>{amounts}
+              <p>Versión {correction?.version ?? payload.expectedVersion + 1}</p>
+              {payload.reason && <p>Motivo: {payload.reason}</p>}
+              <p>{copy.detail}</p>
+            </div>
+          )}
+          {error && <HomeNotice>{error}</HomeNotice>}
+          <div className="home-dialog-actions">
+            <button type="button" className="home-btn home-btn-light" disabled={busy}
+              onClick={payload && !envelope.current ? () => { setPayload(null); setError(""); } : onClose}>
+              {payload && !envelope.current ? "Volver a editar" : "Cerrar"}
+            </button>
+            <button type="submit" className="home-btn" disabled={busy} ref={confirm}>
+              {busy ? "Guardando…" : error && envelope.current ? "Reintentar envío" : payload ? copy.confirm : "Revisar datos"}
+            </button>
+          </div>
+        </form>
+      </HomeDialog>
+    );
+  }
+
+  function HomeCorrectionRecords({ title, records, name, labels, credits, onCredits, onAction }) {
+    return (
+      <div>
+        <h3>{title}</h3>
+        {!records.length && <p>No hay correcciones para esta vista.</p>}
+        {records.map((c) => {
+          const [status, tone] = homeCorrectionState[c.status];
+          const label = labels.get(c.id);
+          const credit = credits.get(c.creditId);
+          return (
+            <article className="home-list-row" key={c.id} aria-label={label}>
+              <div>
+                <strong>{label}</strong>
+                <small>Deudor: {name(c.debtorId)} · Acreedor: {name(c.creditorId)}</small>
+                <small>Motivo: {c.reason}</small>
+                <small>Propuesta: <time dateTime={c.date}>{homeCorrectionTimestamp(c.date)}</time>
+                  {c.decidedAt && <> · Resolución: <time dateTime={c.decidedAt}>{homeCorrectionTimestamp(c.decidedAt)}</time></>}
+                </small>
+                {[c.debtorId, c.creditorId].map((id) => {
+                  const decision = c.decisions.find((d) => d.personId === id);
+                  const text = decision ? (decision.decision === "accept" ? "Aprobó" : "Rechazó")
+                    : c.status === "pending" ? "Pendiente de respuesta" : "Sin decisión";
+                  return <small key={id}>{name(id)}: {text}
+                    {decision && <> · <time dateTime={decision.at}>{homeCorrectionTimestamp(decision.at)}</time></>}
+                    {decision?.reason && " · " + decision.reason}</small>;
+                })}
+                {credit && <small>Crédito generado: {homeMoney(credit.cents)} ·{" "}
+                  <button type="button" className="home-link" aria-label={"Ver saldos a favor: " + label} onClick={onCredits}>Ver saldos a favor</button>
+                </small>}
+              </div>
+              <div className="home-right">
+                <HomeBadge tone={tone}>{status}</HomeBadge>
+                <HomeCorrectionAmounts original={c.originalCents} previous={c.previousCents} proposed={c.proposedCents} />
+                {c.canDecide && <div className="home-actions">
+                  {["accept", "reject"].map((kind) => <button type="button" key={kind}
+                    className={kind === "accept" ? "home-btn" : "home-btn home-btn-light"}
+                    aria-label={homeCorrectionActions[kind].title + ": " + label}
+                    onClick={(event) => onAction({ kind, correction: c, label, trigger: event.currentTarget })}>
+                    {homeCorrectionActions[kind].title}
+                  </button>)}
+                </div>}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function HomeCorrections({ tab, data, obligations, personId, period, token, name, onState, onCredits }) {
+    const [action, setAction] = React.useState(null);
+    const [notice, setNotice] = React.useState("");
+    const heading = React.useRef(null);
+    const byId = new Map(data.obligations.map((ob) => [ob.id, ob]));
+    const matches = (ob) => tab === "history" || (tab === "charges" ? !!ob?.expenseKind : !!ob?.loanId);
+    const offers = tab === "history" ? [] : obligations.filter((ob) => ob.correctionOffer && matches(ob));
+    const records = data.corrections.filter((c) => {
+      const ob = byId.get(c.obligationId);
+      return matches(ob) && (!personId || [c.debtorId, c.creditorId].includes(personId)) &&
+        (!period || (tab === "history" ? homeDashboardDate(c.date) : ob.period || ob.date).slice(0, 7) === period);
+    }).slice().reverse();
+    const credits = new Map(data.credits.map((credit) => [credit.id, credit]));
+    const describe = (ob) => [ob.name, name(ob.debtorId), name(ob.creditorId), ob.period || ob.date,
+      ob.due && "vence " + ob.due].filter(Boolean).join(", ");
+    const offerLabels = homeDistinctLabels(offers, describe);
+    const labels = homeDistinctLabels(records, (c) => {
+      const ob = byId.get(c.obligationId);
+      return (ob ? describe(ob) : "Corrección de obligación") + " · versión " + c.version;
+    });
+    if (tab !== "history" && !offers.length && !records.length && !notice && !action) return null;
+    const recordProps = { name, labels, credits, onCredits, onAction: setAction };
+    return (
+      <section className="home-panel home-corrections">
+        <h2 ref={heading} tabIndex={-1}>Correcciones</h2>
+        {notice && <HomeNotice onDismiss={() => setNotice("")}>{notice}</HomeNotice>}
+        {offers.length > 0 && <div>
+          <h3>Obligaciones para revisar</h3>
+          {offers.map((ob) => (
+            <article className="home-list-row" key={ob.id} aria-label={offerLabels.get(ob.id)}>
+              <div>
+                <strong>{offerLabels.get(ob.id)}</strong>
+                <small>Versión actual: {ob.correctionVersion || 0}</small>
+                {ob.correctionOffer.blocked && <small>{ob.correctionOffer.blocked}</small>}
+              </div>
+              <div className="home-right">
+                <HomeCorrectionAmounts original={ob.cents} previous={ob.effectiveCents ?? ob.cents} />
+                {!ob.correctionOffer.blocked && <button type="button" className="home-btn home-btn-light"
+                  aria-label={"Proponer corrección: " + offerLabels.get(ob.id)}
+                  onClick={(event) => setAction({ kind: "propose", obligation: ob, label: offerLabels.get(ob.id), trigger: event.currentTarget })}>
+                  Proponer corrección
+                </button>}
+              </div>
+            </article>
+          ))}
+        </div>}
+        <HomeCorrectionRecords title="Propuestas pendientes" records={records.filter((c) => c.status === "pending")} {...recordProps} />
+        <HomeCorrectionRecords title="Historial de correcciones" records={records.filter((c) => c.status !== "pending")} {...recordProps} />
+        {action && <HomeCorrectionDialog action={action} token={token} name={name} fallback={heading}
+          onClose={() => setAction(null)}
+          onResult={(state, message) => { onState(state); setNotice(message); setAction(null); }} />}
+      </section>
+    );
+  }
+</script>
