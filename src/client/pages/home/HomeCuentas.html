@@ -15,6 +15,13 @@
     AGREEMENT_PROPOSE: "Propuesta de acuerdo",
     AGREEMENT_RESPOND: "Respuesta al acuerdo",
     AGREEMENT_CANCEL: "Acuerdo cancelado",
+    EXPENSE_SERVICE: "Propuesta de servicio",
+    EXPENSE_PURCHASE: "Propuesta de compra",
+    EXPENSE_RESPOND: "Respuesta al gasto",
+    EXPENSE_INVOICE: "Factura registrada",
+    EXPENSE_PAY: "Factura pagada al proveedor",
+    REIMBURSEMENT_DECLARE: "Reembolso registrado",
+    REIMBURSEMENT_DECIDE: "Respuesta al reembolso",
     LOAN_REQUEST: "Solicitud de préstamo",
     LOAN_DECIDE: "Respuesta al préstamo",
     CORRECTION_PROPOSE: "Propuesta de corrección",
@@ -99,13 +106,13 @@
     );
   }
 
-  function HomeSummaryCard({ label, cents, icon, hint, emphasis }) {
+  function HomeSummaryCard({ label, value, icon, emphasis, children }) {
     return (
       <article className={emphasis ? "home-stat home-stat-green" : "home-stat"}>
         <i className={"bi " + icon} aria-hidden="true" />
         <span>{label}</span>
-        <strong>{homeMoney(cents)}</strong>
-        <small>{hint}</small>
+        <strong>{value}</strong>
+        {children}
       </article>
     );
   }
@@ -266,32 +273,12 @@
         (!personId || o.debtorId === personId || o.creditorId === personId) &&
         (!period || (o.period || o.date.slice(0, 7)) === period),
     );
-    const total = (pred) =>
-      obs.filter(pred).reduce((sum, o) => sum + o.pending, 0);
     const filteredPayments = (data?.payments || []).filter((p) =>
       (!personId || p.debtorId === personId || p.creditorId === personId) &&
       (!period || p.date.slice(0, 7) === period),
     );
     const pendingPayments = (data?.payments || []).filter(
       (p) => p.status === "pending",
-    );
-    const due = total(
-      (o) =>
-        o.pending > 0 &&
-        !!o.creditorId &&
-        (!personId || o.debtorId === personId),
-    );
-    const receivable = total(
-      (o) =>
-        o.pending > 0 &&
-        !!o.creditorId &&
-        (!personId || o.creditorId === personId),
-    );
-    const providerDue = total(
-      (o) =>
-        o.pending > 0 &&
-        !o.creditorId &&
-        (!personId || o.debtorId === personId),
     );
     const debtPayment =
       form.obligationId && allObs.find((o) => o.id === form.obligationId);
@@ -404,7 +391,6 @@
           <div>
             {tab !== "summary" && <p className="home-context">{data.household}</p>}
             <h1>{tab === "summary" ? data.household : homePages.find((page) => page.id === tab)?.label}</h1>
-            {tab === "summary" && <p>Resumen de las cuentas del hogar</p>}
           </div>
           <button type="button" className="home-btn home-btn-light" onClick={load} disabled={loading || busy}>
             <i className="bi bi-arrow-clockwise" aria-hidden="true" />{" "}
@@ -434,14 +420,15 @@
           </section>
         ) : (
           <>
-            {!data.admin && !data.me && (
+            {!data.admin && !data.me && tab !== "summary" && (
               <div className="home-alert">
                 Tu cuenta todavía no está vinculada a un integrante activo. Pide
                 al administrador que la vincule en Integrantes.
               </div>
             )}
-            {["summary", "debts", "history", "charges"].includes(tab) && (
-              <div className="home-filters">
+            {["summary", "debts", "history", "charges"].includes(tab) &&
+              (tab !== "summary" || data.admin || data.me) && (
+              <div className={tab === "summary" ? "home-filters home-dashboard-filters" : "home-filters"}>
                 {data.admin ? (
                   <HomeField label="Cuenta de">
                     <select
@@ -457,7 +444,7 @@
                       ))}
                     </select>
                   </HomeField>
-                ) : (
+                ) : tab !== "summary" && (
                   <div className="home-profile">
                     <span className="home-avatar">
                       {name(data.me).slice(0, 1)}
@@ -465,7 +452,7 @@
                     <strong>{data.me ? name(data.me) : "Mi cuenta"}</strong>
                   </div>
                 )}
-                <HomeField label="Período">
+                <HomeField label="Período" hint={tab === "summary" && period ? "El filtro se aplica a cuentas y actividad." : undefined}>
                   <input
                     aria-label="Período"
                     type="month"
@@ -481,110 +468,8 @@
               </div>
             )}
             {tab === "summary" && (
-              <>
-                <div className="home-stats">
-                  <HomeSummaryCard label="Por pagar" cents={due} icon="bi-arrow-up-right"
-                    hint={personId ? "Deudas con integrantes" : "Total de deudas entre integrantes"} />
-                  <HomeSummaryCard label="Por recibir" cents={receivable} icon="bi-arrow-down-left" emphasis
-                    hint={personId ? "Adelantos y préstamos por cobrar" : "Las mismas deudas desde quien cobra"} />
-                  <HomeSummaryCard label="Por pagar al proveedor" cents={providerDue} icon="bi-receipt"
-                    hint="Aportes a facturas pendientes" />
-                </div>
-                <div className="home-columns">
-                  <section className="home-panel">
-                    <div className="home-panel-head">
-                      <h2>Lo próximo por resolver</h2>
-                      <button
-                        className="home-link"
-                        onClick={() => setTab("debts")}
-                      >
-                        Ver cuentas →
-                      </button>
-                    </div>
-                    {!obs.some((o) => o.pending > 0) ? (
-                      <div className="home-empty">
-                        <i className="bi bi-check2-circle" />
-                        <h3>Sin cuentas pendientes</h3>
-                        <p>
-                          Aquí aparecerán los aportes y deudas por resolver.
-                        </p>
-                      </div>
-                    ) : (
-                      obs
-                        .filter((o) => o.pending > 0)
-                        .sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))
-                        .slice(0, 5)
-                        .map((o) => (
-                          <div className="home-list-row" key={o.id}>
-                            <div>
-                              <strong>{o.name}</strong>
-                              <small>
-                                {name(o.debtorId)} → {name(o.creditorId)} ·{" "}
-                                {o.due ? "Vence " + o.due : "Sin vencimiento"}
-                              </small>
-                            </div>
-                            <div className="home-right">
-                              <strong>{homeMoney(o.pending)}</strong>
-                              <HomeBadge tone={o.due && o.due < today ? "danger" : "neutral"}>
-                                {o.due && o.due < today ? "Vencido" : "Pendiente"}
-                              </HomeBadge>
-                            </div>
-                          </div>
-                        ))
-                    )}
-                  </section>
-                  <section className="home-panel home-guide">
-                    <h2>¿Cómo registrar un gasto?</h2>
-                    <p>
-                      Cada servicio tiene sus propios participantes. Cambiar el
-                      próximo reparto conserva las facturas anteriores.
-                    </p>
-                    <ol>
-                      <li>Configura el gasto y sus participantes.</li>
-                      <li>Registra la factura del mes.</li>
-                      <li>Registra y confirma los pagos.</li>
-                    </ol>
-                    {data.admin && (
-                      <button
-                        className="home-btn"
-                        onClick={() => {
-                          setTab("charges");
-                          open("TEMPLATE");
-                        }}
-                      >
-                        Crear un gasto
-                      </button>
-                    )}
-                  </section>
-                </div>
-                {data.admin && data.audit.length > 0 && (
-                  <section className="home-panel">
-                    <div className="home-panel-head">
-                      <h2>Actividad reciente</h2>
-                      <button className="home-link" onClick={() => setTab("history")}>Ver historial →</button>
-                    </div>
-                    {data.audit
-                      .slice(-6)
-                      .reverse()
-                      .map((e) => (
-                        <div className="home-list-row" key={e.id}>
-                          <div>
-                            <strong>
-                              {homeLabels[e.type] || e.type}
-                              {e.voided ? " · anulado" : ""}
-                            </strong>
-                            <small>{e.note}</small>
-                          </div>
-                          <small>
-                            {new Date(e.at).toLocaleString("es-HN", {
-                              timeZone: "America/Tegucigalpa",
-                            })}
-                          </small>
-                        </div>
-                      ))}
-                  </section>
-                )}
-              </>
+              <HomeDashboard data={data} period={period} selected={selected}
+                name={name} onNavigate={setTab} onCreate={() => open("TEMPLATE")} />
             )}
             {tab === "charges" && (
               <>

@@ -71,6 +71,10 @@ module.exports = [
     "Frontend/views/HomeCuentas.html"
   ],
   [
+    "src/client/pages/home/HomeDashboard.html",
+    "Frontend/views/HomeDashboard.html"
+  ],
+  [
     "src/client/pages/legacy/Inicio.html",
     "Frontend/views/Inicio.html"
   ],

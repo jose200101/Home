@@ -1,0 +1,231 @@
+<script>
+  const homeDashboardDay = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Tegucigalpa", year: "numeric", month: "2-digit", day: "2-digit",
+  });
+
+  function homeDashboardDate(value) {
+    if (!value || !value.includes("T")) return value || "";
+    const instant = new Date(value);
+    return Number.isNaN(instant.getTime()) ? "" : homeDashboardDay.format(instant);
+  }
+
+  function homeDashboardModel(data, selected, period) {
+    const personId = (data.admin ? selected : data.me) || "";
+    const household = data.admin && !personId;
+    const scoped = household || !!personId;
+    const withinPeriod = (value) => !period || homeDashboardDate(value).slice(0, 7) === period;
+    const matchesPerson = (...parties) => !!personId && parties.includes(personId);
+    const counts = { payments: 0, loans: 0, agreements: 0, corrections: 0, credits: 0 };
+    const credits = { pending: 0, reserved: 0, available: 0 };
+    let memberDue = 0;
+    let providerDue = 0;
+    let receivable = 0;
+    const upcoming = [];
+    const activity = [];
+    if (!scoped) return { household, personId, scoped, memberDue, providerDue, receivable, credits, upcoming, counts, attention: 0, activity };
+
+    // El saldo de la proyección ya incluye los efectos de los pagos confirmados.
+    for (const obligation of data.obligations) {
+      const { debtorId, creditorId, pending } = obligation;
+      if (pending <= 0 || !withinPeriod(obligation.period || obligation.date)) continue;
+      if (!(household || matchesPerson(debtorId, creditorId))) continue;
+      if (household || debtorId === personId) {
+        if (creditorId) memberDue += pending;
+        else providerDue += pending;
+      } else if (creditorId === personId) {
+        receivable += pending;
+      }
+      upcoming.push({ ...obligation, overdue: Boolean(obligation.due && obligation.due < data.today) });
+    }
+    upcoming.sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999") || a.id.localeCompare(b.id));
+
+    if (personId) {
+      for (const credit of data.credits || []) {
+        if (credit.beneficiaryId !== personId) continue;
+        credits.pending += credit.pending;
+        credits.reserved += credit.reserved;
+        credits.available += credit.available;
+      }
+    }
+
+    const eligible = new Set(data.people
+      .filter((person) => person.active && (data.admin ? Boolean(person.userId) : person.id === data.me))
+      .map((person) => person.id));
+    const canRespond = (id) => eligible.has(id) && (household || id === personId);
+
+    function addActivity(kind, item, at, label, amount, otherParty) {
+      if (!homeDashboardDate(at) || !withinPeriod(at)) return;
+      activity.push({ key: kind + ":" + item.id, at, label, amount, status: item.status, detail: item.name, otherParty });
+    }
+
+    for (const payment of data.payments || []) {
+      if (payment.status === "pending" && canRespond(payment.creditorId)) counts.payments++;
+      if (matchesPerson(payment.debtorId, payment.creditorId))
+        addActivity("payment", payment, payment.decidedAt || payment.declaredAt || payment.date,
+          "Pago", payment.cents, payment.creditorId === personId ? payment.debtorId : payment.creditorId);
+    }
+    for (const loan of data.loans || []) {
+      if (loan.status === "pending" && canRespond(loan.debtorId)) counts.loans++;
+      if (matchesPerson(loan.debtorId, loan.creditorId))
+        addActivity("loan", loan, loan.decidedAt || loan.requestedAt || loan.date,
+          "Préstamo", loan.cents, loan.creditorId === personId ? loan.debtorId : loan.creditorId);
+    }
+    for (const { pending } of data.agreements || []) {
+      if (pending?.status === "pending" && pending.participants.some(
+        (participant) => participant.decision === "pending" && canRespond(participant.personId),
+      )) counts.agreements++;
+    }
+    for (const correction of data.corrections || []) {
+      if (correction.status === "pending" && [correction.debtorId, correction.creditorId].some(
+        (id) => canRespond(id) && !correction.decisions.some((decision) => decision.personId === id),
+      )) counts.corrections++;
+      if (matchesPerson(correction.debtorId, correction.creditorId))
+        addActivity("correction", correction, correction.decidedAt || correction.date, "Corrección", correction.proposedCents);
+    }
+    for (const operation of data.creditOperations || []) {
+      if (operation.status === "pending" && canRespond(operation.deciderId)) counts.credits++;
+      if (matchesPerson(operation.holderId, operation.beneficiaryId))
+        addActivity("credit", operation, operation.decidedAt || operation.declaredAt,
+          operation.kind === "refund" ? "Devolución de crédito" : "Aplicación de crédito", operation.cents);
+    }
+    if (household) {
+      for (const event of data.audit || []) {
+        if (homeDashboardDate(event.at) && withinPeriod(event.at)) activity.push({
+          key: "audit:" + event.id, at: event.at, type: event.type, detail: event.note,
+          status: event.voided ? "voided" : "",
+        });
+      }
+    }
+    activity.reverse().sort((a, b) => b.at.localeCompare(a.at));
+    const attention = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    return { household, personId, scoped, memberDue, providerDue, receivable, credits, upcoming: upcoming.slice(0, 5), counts, attention, activity: activity.slice(0, 6) };
+  }
+</script>
+
+<script type="text/babel">
+  const homeDashboardDateLabel = new Intl.DateTimeFormat("es-HN", {
+    timeZone: "America/Tegucigalpa", day: "numeric", month: "short", year: "numeric",
+  });
+
+  function HomeDashboardStatus({ status, pendingLabel }) {
+    const labels = {
+      pending: [pendingLabel, "warning"], confirmed: ["Confirmado", "success"],
+      accepted: ["Aceptado", "success"], rejected: ["Rechazado", "danger"],
+      cancelled: ["Cancelado", "neutral"], voided: ["Anulado", "neutral"],
+    };
+    const state = labels[status];
+    return state ? <HomeBadge tone={state[1]}>{state[0]}</HomeBadge> : null;
+  }
+
+  function HomeDashboard({ data, selected, period, name, onNavigate, onCreate }) {
+    const view = homeDashboardModel(data, selected, period);
+    const activityDate = (at) => homeDashboardDateLabel.format(new Date(homeDashboardDate(at) + "T12:00:00Z"));
+    const scope = view.household ? "Todo el hogar" : view.personId ? name(view.personId) : "";
+    const attendance = [
+      ["payments", "Pagos por confirmar"], ["loans", "Solicitudes de préstamo"],
+      ["agreements", "Acuerdos por responder"], ["corrections", "Correcciones por responder"],
+      ["credits", "Decisiones sobre créditos"],
+    ].filter(([key]) => view.counts[key] > 0);
+
+    if (!view.scoped) return (
+      <section className="home-panel">
+        <HomeEmpty icon="bi-person" title="Sin cuenta de integrante">
+          Tus saldos y movimientos estarán disponibles cuando se vincule tu cuenta.
+        </HomeEmpty>
+      </section>
+    );
+
+    return (
+      <div className="home-dashboard">
+        <div className="home-dashboard-heading">
+          <h2>Resumen financiero</h2>
+          <span className="home-badge">{scope}</span>
+        </div>
+        <div className="home-stats">
+          <HomeSummaryCard label="Por pagar" value={homeMoney(view.memberDue + view.providerDue)} icon="bi-arrow-up-right">
+            <dl className="home-stat-detail">
+              <div><dt>A integrantes</dt><dd>{homeMoney(view.memberDue)}</dd></div>
+              <div><dt>Al proveedor</dt><dd>{homeMoney(view.providerDue)}</dd></div>
+            </dl>
+          </HomeSummaryCard>
+          <HomeSummaryCard label="Por recibir" value={view.household ? "—" : homeMoney(view.receivable)} icon="bi-arrow-down-left">
+            <small>{view.household ? "Selecciona un integrante para ver sus cobros." : "Obligaciones pendientes a favor de esta cuenta."}</small>
+          </HomeSummaryCard>
+          <HomeSummaryCard label="Créditos disponibles" value={view.household ? "—" : homeMoney(view.credits.available)} icon="bi-wallet2" emphasis>
+            {view.household ? <small>Selecciona un integrante para ver sus créditos.</small> : (
+              <dl className="home-stat-detail">
+                <div><dt>Saldo total</dt><dd>{homeMoney(view.credits.pending)}</dd></div>
+                <div><dt>Reservado</dt><dd>{homeMoney(view.credits.reserved)}</dd></div>
+              </dl>
+            )}
+          </HomeSummaryCard>
+          <HomeSummaryCard label={data.admin ? "Requieren atención" : "Requieren tu atención"} value={view.attention} icon="bi-bell">
+            <small>{view.attention === 1 ? "Operación pendiente" : "Operaciones pendientes"}</small>
+          </HomeSummaryCard>
+        </div>
+
+        <nav className="home-dashboard-actions" aria-label="Acciones rápidas">
+          {[
+            ["charges", "Gastos", "bi-receipt"],
+            ["debts", "Préstamos y cuentas", "bi-arrow-left-right"],
+            ["credits", "Créditos", "bi-wallet2"],
+            ["history", "Historial", "bi-clock-history"],
+          ].map(([id, label, icon]) => (
+            <button key={id} type="button" className="home-btn home-btn-light" onClick={() => onNavigate(id)}>
+              <i className={"bi " + icon} aria-hidden="true" /> {label}
+            </button>
+          ))}
+          {data.admin && <button type="button" className="home-btn" onClick={onCreate}>
+            <i className="bi bi-plus-lg" aria-hidden="true" /> Crear gasto
+          </button>}
+        </nav>
+
+        <div className="home-columns">
+          <section className="home-panel">
+            <h2>Próximos movimientos</h2>
+            {view.upcoming.length ? view.upcoming.map((obligation) => (
+              <HomeMovement key={obligation.id} title={obligation.name} cents={obligation.pending}
+                detail={name(obligation.debtorId) + " → " + name(obligation.creditorId) + " · " +
+                  (obligation.due ? "Vence " + activityDate(obligation.due) : "Sin vencimiento")}>
+                <HomeBadge tone={obligation.overdue ? "danger" : "neutral"}>
+                  {obligation.overdue ? "Vencido" : "Pendiente"}
+                </HomeBadge>
+              </HomeMovement>
+            )) : <HomeEmpty icon="bi-check2-circle" title="Sin cuentas pendientes">
+              Aquí aparecerán los vencimientos y saldos por resolver.
+            </HomeEmpty>}
+          </section>
+          <section className="home-panel">
+            <h2>Atención pendiente</h2>
+            {attendance.length ? (
+              <dl className="home-attention-list">
+                {attendance.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{view.counts[key]}</dd></div>)}
+              </dl>
+            ) : <p>No hay decisiones pendientes para esta vista.</p>}
+          </section>
+        </div>
+        <section className="home-panel">
+          <h2>Actividad reciente</h2>
+          {view.activity.length ? view.activity.map((record) => {
+            const { label, detail, otherParty, type, status, amount, at } = record;
+            return (
+              <div className="home-list-row" key={record.key}>
+                <div>
+                  <strong>{type ? homeLabels[type] || "Movimiento registrado" : label}</strong>
+                  {(detail || otherParty) && <small>{[detail, otherParty && name(otherParty)].filter(Boolean).join(" · ")}</small>}
+                </div>
+                <div className="home-right">
+                  {amount !== undefined && <strong>{homeMoney(amount)}</strong>}
+                  <HomeDashboardStatus status={status} pendingLabel={label === "Pago" ? "Por confirmar" : "Por responder"} />
+                  <small><time dateTime={at}>{activityDate(at)}</time></small>
+                </div>
+              </div>
+            );
+          }) : <HomeEmpty icon="bi-clock-history" title="Sin actividad reciente">
+            Aquí aparecerán los movimientos de esta vista.
+          </HomeEmpty>}
+        </section>
+      </div>
+    );
+  }
+</script>
