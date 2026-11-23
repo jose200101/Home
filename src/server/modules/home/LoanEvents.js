@@ -11,6 +11,23 @@ function homeLoanAccess_(state, session, personId, activeOnly) {
     throw new Error("Préstamo no disponible para esta cuenta.");
 }
 
+function homeLoansVisible_(state, session, loans) {
+  if (!loans.length) return loans;
+  const member = homeAgreementMember_(state, session, false);
+  const activePeople = new Set(state.people.filter((person) => person.active).map((person) => person.id));
+  return loans.map((loan) => {
+    const allowedDecisions = [];
+    if (member && loan.status === "pending") {
+      if (loan.creditorId === member.id) allowedDecisions.push("cancel");
+      if (loan.debtorId === member.id) {
+        if (member.active && activePeople.has(loan.creditorId)) allowedDecisions.push("accept");
+        allowedDecisions.push("reject");
+      }
+    }
+    return { ...loan, allowedDecisions };
+  });
+}
+
 function homeLoanCommand_(request, state, session) {
   if (!state.initialized) throw new Error("Primero configura el hogar.");
   const p = request.payload || {};

@@ -14,14 +14,6 @@
     return { me, groups, debtors: me ? active.filter((person) => person.id !== me) : [] };
   }
 
-  function homeLoanActions(loan, me, people) {
-    if (!me || loan.status !== "pending") return [];
-    if (loan.creditorId === me) return ["cancel"];
-    if (loan.debtorId !== me) return [];
-    return people.some((person) => person.id === loan.creditorId && person.active)
-      ? ["accept", "reject"] : ["reject"];
-  }
-
   function homeLoanRequestPayload(form, debtors, today) {
     const { debtorId, date, due } = form;
     const name = form.name.trim();
@@ -78,13 +70,13 @@
     </>;
   }
 
-  function HomeLoanList({ title, empty, loans, people, me, name, onDecision }) {
+  function HomeLoanList({ title, empty, loans, name, onDecision }) {
     return (
       <section className="home-panel home-loan-list">
         <h3>{title}</h3>
         {!loans.length && <p>{empty}</p>}
         {loans.map((loan) => {
-          const actions = homeLoanActions(loan, me, people);
+          const actions = loan.allowedDecisions || [];
           const [label, tone] = homeLoanStatus[loan.status];
           return (
             <article className="home-list-row" key={loan.id} aria-label={loan.name}>
@@ -253,7 +245,7 @@
     const [action, setAction] = React.useState(null);
     const [notice, setNotice] = React.useState("");
     const heading = React.useRef(null);
-    const listProps = { me, people: data.people, name, onDecision: setAction };
+    const listProps = { name, onDecision: setAction };
     return (
       <>
         <div className="home-section-head">
@@ -267,7 +259,7 @@
             </button>
           )}
         </div>
-        {!me && <p className="home-info">Vincula tu cuenta a un integrante activo para solicitar préstamos o responder.</p>}
+        {!me && <p className="home-info">Para solicitar o aceptar préstamos, tu cuenta debe estar vinculada a un integrante activo.</p>}
         {me && !debtors.length && <p className="home-info">Hace falta otro integrante activo para solicitar un préstamo.</p>}
         {notice && <HomeNotice onDismiss={() => setNotice("")}>{notice}</HomeNotice>}
         <HomeLoanList title="Solicitudes recibidas" empty="No hay solicitudes recibidas pendientes en esta vista." loans={groups.received} {...listProps} />

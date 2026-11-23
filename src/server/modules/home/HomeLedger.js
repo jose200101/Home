@@ -399,6 +399,7 @@ function homeVisible_(state, session) {
     }));
     result.plan = []; // Un neteo global podría revelar deudas de terceros.
   } else result.plan = homePlan_(state.obligations.filter((item) => !homeUsesParticipantPayments_(item)));
+  result.loans = homeLoansVisible_(state, session, result.loans);
   result.creditTotals = homeCreditTotals_(result.credits);
   return result;
 }
