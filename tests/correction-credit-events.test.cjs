@@ -1,6 +1,17 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { createHarness } = require("../tools/harness.cjs");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+function viewScript(name) {
+  const html = fs.readFileSync(path.join(__dirname, "../dist/Frontend/views", name + ".html"), "utf8");
+  return html.match(/<script>([\s\S]*?)<\/script>/)[1];
+}
+const { homeCreditPayload, homeDistinctLabels } = vm.runInNewContext(
+  viewScript("HomeCredits") + viewScript("HomeReimbursements") + "\n({ homeCreditPayload, homeDistinctLabels })",
+);
 
 function fixture() {
   const h = createHarness();
@@ -148,6 +159,59 @@ function fixture() {
     denied,
   };
 }
+
+test("la proyección ofrece destinos compatibles y acciones de sesión aunque los integrantes estén archivados", () => {
+  const f = fixture();
+  const id = f.credit();
+  const target = f.expense("destino", f.luis, f.ana, "40").obligation;
+  f.expense("sin-pagar", f.luis, f.ana, "80", "2026-11", false);
+  f.expense("otras-partes", f.luis, f.maria, "90");
+  const blocked = f.expense("en-correccion").obligation;
+  f.propose("100", 0, blocked);
+  const loan = f.h.execute("LOAN_REQUEST", {
+    debtorId: f.luis.id, name: "Préstamo", date: "2026-11-12", amount: "200",
+  }, "ana").id;
+  f.h.execute("LOAN_DECIDE", { loanId: loan, decision: "accept" }, "luis");
+  for (const p of [f.ana, f.luis]) {
+    f.h.execute("PERSON", { id: p.id, name: p.name, userId: p.userId, active: false });
+  }
+  const credit = (user) => f.state(user).credits.find((c) => c.id === id);
+  assert.equal(f.state("luis").me, "");
+  assert.equal(credit("ana").canRefund, true);
+  assert.equal(credit("luis").canRefund, false);
+  assert.equal(credit("admin").canRefund, false);
+  assert.deepEqual(Array.from(credit("admin").targets), []);
+  assert.equal(f.state("maria").credits.length, 0);
+  for (const user of ["ana", "luis"]) {
+    assert.deepEqual(Array.from(credit(user).targets, (x) => ({ ...x })), [{ obligationId: target, limit: 4000 }]);
+  }
+  const action = { kind: "application", credit: credit("luis") };
+  const form = { obligationId: target, amount: "40,00", note: " Acuerdo " };
+  assert.throws(() => homeCreditPayload(action, { ...form, amount: "40.01" }), /límite/);
+  assert.throws(() => homeCreditPayload(action, { ...form, obligationId: loan }), /no|disponible/);
+  const payload = homeCreditPayload(action, form);
+  const proposal = f.h.execute("CREDIT_APPLY_PROPOSE", payload, "luis", "credit-ui-propose01");
+  assert(f.h.execute("CREDIT_APPLY_PROPOSE", payload, "luis", "credit-ui-propose01").duplicate);
+  assert.equal(credit("luis").reserved, 4000);
+  assert.equal(f.balance(target).creditReserved, 4000);
+  assert.equal(f.balance(target).pending, 4000);
+  assert.deepEqual(Array.from(credit("luis").targets), []);
+  const operation = f.state("ana").creditOperations.find((o) => o.id === proposal.id);
+  assert.equal(operation.canDecide, true);
+  assert.equal(f.state("admin").creditOperations[0].canDecide, false);
+  assert.throws(() => homeCreditPayload({ kind: "reject", operation }, { reason: "  " }), /motivo/);
+  const reject = homeCreditPayload({ kind: "reject", operation }, { reason: " Falta comprobante " });
+  f.h.execute("CREDIT_DECIDE", reject, "ana");
+  assert.equal(credit("luis").pending, 10000);
+  assert.equal(credit("luis").available, 10000);
+  assert.equal(f.balance(target).available, 4000);
+  assert.equal(f.state("ana").creditOperations[0].canDecide, false);
+});
+
+test("los nombres accesibles distinguen registros cuando el concepto y los detalles coinciden", () => {
+  const labels = homeDistinctLabels([{ id: "a" }, { id: "b" }, { id: "c" }], (x) => x.id === "c" ? "Otro" : "Mismo");
+  assert.deepEqual(Array.from(labels.values()), ["Mismo, registro 1", "Mismo, registro 2", "Otro"]);
+});
 
 test("corrección versionada exige las dos partes, admite incremento y conserva factura y principal", () => {
   const f = fixture();

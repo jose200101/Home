@@ -401,6 +401,7 @@ function homeVisible_(state, session) {
   } else result.plan = homePlan_(state.obligations.filter((item) => !homeUsesParticipantPayments_(item)));
   result.loans = homeLoansVisible_(state, session, result.loans);
   homeReimbursementsVisible_(state, result, session);
+  homeCreditsVisible_(state, result, session);
   result.creditTotals = homeCreditTotals_(result.credits);
   return result;
 }

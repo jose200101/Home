@@ -1,4 +1,16 @@
 <script>
+  function homeDistinctLabels(items, describe) {
+    const entries = items.map((item) => [item.id, describe(item)]);
+    const counts = new Map();
+    const seen = new Map();
+    for (const [, label] of entries) counts.set(label, (counts.get(label) || 0) + 1);
+    return new Map(entries.map(([id, label]) => {
+      const index = (seen.get(label) || 0) + 1;
+      seen.set(label, index);
+      return [id, counts.get(label) === 1 ? label : label + ", registro " + index];
+    }));
+  }
+
   function homeReimbursementPayload(action, form, today) {
     if (action.decision) {
       const reason = form.reason.trim();
@@ -213,6 +225,10 @@
     const [action, setAction] = React.useState(null);
     const [notice, setNotice] = React.useState("");
     const heading = React.useRef(null);
+    const balanceLabels = homeDistinctLabels(balances, (o) =>
+      [o.name, name(o.creditorId), o.period || o.date, o.due && "vence " + o.due, homeMoney(o.available)].filter(Boolean).join(", "));
+    const paymentLabels = homeDistinctLabels(entries, (p) =>
+      [allObligations.find((o) => o.id === p.obligationId)?.name || "Abono", name(p.debtorId), p.date, homeMoney(p.cents)].join(", "));
     if (tab !== "history" && !balances.length && !entries.length && !notice && !action) return null;
     return (
       <section className="home-panel home-reimbursements">
@@ -229,7 +245,7 @@
             <div className="home-right">
               <HomeReimbursementBalances obligation={o} />
               {o.reimbursement.canDeclare && (
-                <button type="button" className="home-btn home-btn-light" aria-label={"Registrar abono: " + o.name}
+                <button type="button" className="home-btn home-btn-light" aria-label={"Registrar abono: " + balanceLabels.get(o.id)}
                   onClick={(e) => setAction({ obligation: o, title: o.name, trigger: e.currentTarget })}>
                   Registrar abono
                 </button>
@@ -256,6 +272,7 @@
                   <div className="home-actions">
                     {["confirm", "reject"].map((decision) => (
                       <button type="button" key={decision}
+                        aria-label={homeReimbursementCopy[decision].title + ": " + paymentLabels.get(p.id)}
                         className={decision === "confirm" ? "home-btn" : "home-btn home-btn-light"}
                         onClick={(e) => setAction({ payment: p, decision, title, trigger: e.currentTarget })}>
                         {homeReimbursementCopy[decision].title}
