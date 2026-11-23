@@ -193,6 +193,12 @@ function homeProject_(events) {
     obligations = {},
     payments = {},
     loans = Object.create(null);
+  const adjustments = {
+    obligations,
+    corrections: Object.create(null),
+    credits: Object.create(null),
+    creditOperations: Object.create(null),
+  };
   events.forEach((e) => {
     const d = Object.assign({}, e.data);
     delete d.requestJson;
@@ -205,6 +211,14 @@ function homeProject_(events) {
       voided: voided.has(e.id),
     });
     if (voided.has(e.id)) return;
+    if (homeIsCorrectionType_(e.type)) {
+      homeCorrectionReplay_(adjustments, e, d);
+      return;
+    }
+    if (homeIsCreditType_(e.type)) {
+      homeCreditReplay_(adjustments, e, d);
+      return;
+    }
     if (homeIsLoanType_(e.type)) {
       homeLoanReplay_(loans, obligations, e, d);
       return;
@@ -285,13 +299,20 @@ function homeProject_(events) {
     const ob = obligations[id];
     ob.pending = ob.cents - ob.paid;
     if (homeUsesParticipantPayments_(ob)) {
-      ob.available = ob.pending - ob.reserved;
+      ob.pending = homeObligationBalance_(ob);
+      ob.available = homeObligationAvailable_(ob);
       ob.status = ob.pending === 0 ? "settled" : "open";
     }
     return ob;
   });
   state.payments = Object.keys(payments).map((id) => payments[id]);
   state.loans = Object.values(loans);
+  state.corrections = Object.values(adjustments.corrections);
+  state.credits = Object.values(adjustments.credits).map(credit => ({
+    ...credit, pending: homeCreditBalance_(credit),
+    available: homeCreditBalance_(credit) - credit.reserved,
+  }));
+  state.creditOperations = Object.values(adjustments.creditOperations);
   return state;
 }
 
@@ -350,6 +371,10 @@ function homeVisible_(state, session) {
     result.loans = linked ? state.loans.filter(
       (loan) => loan.debtorId === linked.id || loan.creditorId === linked.id,
     ) : [];
+    const mine = (a, b) => linked && (linked.id === a || linked.id === b);
+    result.corrections = state.corrections.filter(c => mine(c.debtorId, c.creditorId));
+    result.credits = state.credits.filter(c => mine(c.holderId, c.beneficiaryId));
+    result.creditOperations = state.creditOperations.filter(c => mine(c.holderId, c.beneficiaryId));
     result.obligations = state.obligations.filter(
       (o) => o.debtorId === personId(o) || o.creditorId === personId(o),
     );
@@ -374,6 +399,7 @@ function homeVisible_(state, session) {
     }));
     result.plan = []; // Un neteo global podría revelar deudas de terceros.
   } else result.plan = homePlan_(state.obligations.filter((item) => !homeUsesParticipantPayments_(item)));
+  result.creditTotals = homeCreditTotals_(result.credits);
   return result;
 }
 
@@ -385,6 +411,8 @@ function homeGetState(token) {
 function homeCommand_(request, state, events, session) {
   const type = request.type;
   const p = request.payload || {};
+  if (homeIsCorrectionType_(type)) return homeCorrectionCommand_(request, state, session);
+  if (homeIsCreditType_(type)) return homeCreditCommand_(request, state, session);
   if (homeIsLoanType_(type)) return homeLoanCommand_(request, state, session);
   if (homeIsReimbursementType_(type)) return homeReimbursementCommand_(request, state, session);
   if (homeIsExpenseType_(type)) return homeExpenseCommand_(request, state, events, session);
@@ -625,7 +653,8 @@ function homeExecute(token, request) {
   const agreement = request && homeIsAgreementType_(request.type);
   const reimbursement = request && homeIsReimbursementType_(request.type);
   const loan = request && homeIsLoanType_(request.type);
-  const versioned = expense || agreement || reimbursement || loan;
+  const adjustment = request && (homeIsCorrectionType_(request.type) || homeIsCreditType_(request.type));
+  const versioned = expense || agreement || reimbursement || loan || adjustment;
   if (versioned && typeof request.id !== "string")
     throw new Error("Identificador de operación inválido.");
   if (!request || !/^[a-zA-Z0-9_-]{12,100}$/.test(String(request.id || "")))
@@ -650,6 +679,11 @@ function homeExecute(token, request) {
       if (loan)
         homeLoanAccess_(state, session, previous.type === "LOAN_REQUEST"
           ? previous.data.creditorId : previous.data.personId, false);
+      if (adjustment) {
+        if (previous.type === "CORRECTION_PROPOSE") {
+          if (!session.admin) throw new Error("Esta operación requiere administrador.");
+        } else homeAdjustmentParty_(state, session, [previous.data.personId]);
+      }
       return {
         ok: true,
         duplicate: true,
@@ -659,11 +693,12 @@ function homeExecute(token, request) {
     }
     const state = homeProject_(events);
     const data = homeCommand_(request, state, events, session);
-    if (loan) data.schema = HOME_LOAN_SCHEMA_;
+    if (adjustment) data.schema = HOME_ADJUSTMENT_SCHEMA_;
+    else if (loan) data.schema = HOME_LOAN_SCHEMA_;
     else if (reimbursement) data.schema = HOME_REIMBURSEMENT_SCHEMA_;
     else if (expense) data.schema = HOME_EXPENSE_SCHEMA_;
     else data.schema = agreement ? HOME_AGREEMENT_SCHEMA_ : HOME_SCHEMA_;
-    if (expense || reimbursement || loan) data.eventVersion = 1;
+    if (expense || reimbursement || loan || adjustment) data.eventVersion = 1;
     data.requestJson = JSON.stringify(request.payload || {});
     const event = {
       id: request.id,
@@ -678,7 +713,7 @@ function homeExecute(token, request) {
         "La operación es demasiado grande. Reduce el número de participantes.",
       );
     // Verificar la proyección y privacidad nuevas antes de persistir.
-    const next = reimbursement || loan
+    const next = reimbursement || loan || adjustment
       ? homeVisible_(homeProject_(events.concat([event])), session) : null;
     const ss = conexion_();
     let sh = ss.getSheetByName(HOME_SHEET_);

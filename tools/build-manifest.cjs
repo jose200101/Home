@@ -125,5 +125,13 @@ module.exports = [
   [
     "src/server/modules/home/LoanEvents.js",
     "Backend/LoanEvents.js"
+  ],
+  [
+    "src/server/modules/home/CorrectionEvents.js",
+    "Backend/CorrectionEvents.js"
+  ],
+  [
+    "src/server/modules/home/CreditEvents.js",
+    "Backend/CreditEvents.js"
   ]
 ];
