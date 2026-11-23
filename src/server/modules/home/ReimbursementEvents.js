@@ -1,5 +1,9 @@
-/** Reembolsos de obligaciones de gastos recurrentes y ocasionales de HOME v1. */
+/** Abonos entre integrantes para gastos compartidos y préstamos personales. */
 const HOME_REIMBURSEMENT_SCHEMA_ = 4;
+
+function homeUsesParticipantPayments_(item) {
+  return !!(item && (item.expenseKind || item.loanId));
+}
 
 function homeIsReimbursementType_(type) {
   return type === "REIMBURSEMENT_DECLARE" || type === "REIMBURSEMENT_DECIDE";
@@ -17,16 +21,24 @@ function homeReimbursementCommand_(request, state, session) {
   if (request.type === "REIMBURSEMENT_DECLARE") {
     const ob = state.obligations.find(
       (item) =>
-        item.id === p.obligationId && item.expenseKind && item.creditorId,
+        item.id === p.obligationId &&
+        homeUsesParticipantPayments_(item) &&
+        item.creditorId,
     );
     homeReimbursementAccess_(state, session, ob && ob.debtorId);
     const cents = homeCents_(p.amount);
     if (cents > ob.available)
       throw new Error("El abono supera el saldo disponible.");
     const date = homeDate_(p.date);
-    const charge = state.charges.find((item) => item.id === ob.sourceId);
-    if (date < charge.paidDate || date > homeToday_())
-      throw new Error("La fecha debe estar entre el pago al proveedor y hoy.");
+    const earliest = ob.loanId
+      ? ob.date
+      : state.charges.find((item) => item.id === ob.sourceId).paidDate;
+    if (date < earliest || date > homeToday_())
+      throw new Error(
+        ob.loanId
+          ? "La fecha debe estar entre la fecha del préstamo y hoy."
+          : "La fecha debe estar entre el pago al proveedor y hoy.",
+      );
     const note =
       p.note == null || String(p.note).trim() === ""
         ? ""
@@ -35,7 +47,7 @@ function homeReimbursementCommand_(request, state, session) {
       obligationId: ob.id,
       debtorId: ob.debtorId,
       creditorId: ob.creditorId,
-      expenseKind: ob.expenseKind,
+      ...(ob.loanId ? { loanId: ob.loanId } : { expenseKind: ob.expenseKind }),
       cents,
       date,
       note,
@@ -68,12 +80,13 @@ function homeReimbursementReplay_(obligations, payments, event, data) {
     const ob = obligations[data.obligationId];
     if (
       !ob ||
-      !ob.expenseKind ||
+      !homeUsesParticipantPayments_(ob) ||
       !ob.creditorId ||
       ob.debtorId === ob.creditorId ||
       ob.debtorId !== data.debtorId ||
       ob.creditorId !== data.creditorId ||
       ob.expenseKind !== data.expenseKind ||
+      ob.loanId !== data.loanId ||
       payments[event.id] ||
       !Number.isSafeInteger(data.cents) ||
       data.cents <= 0 ||
