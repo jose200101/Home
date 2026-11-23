@@ -1,0 +1,277 @@
+<script>
+  function homeReimbursementPayload(action, form, today) {
+    if (action.decision) {
+      const reason = form.reason.trim();
+      if (action.decision === "reject" && (!reason || reason.length > 500)) {
+        throw new Error("Escribe un motivo de rechazo de hasta 500 caracteres.");
+      }
+      return {
+        paymentId: action.payment.id,
+        decision: action.decision,
+        ...(action.decision === "reject" ? { reason } : {}),
+      };
+    }
+    const obligation = action.obligation;
+    if (!obligation.reimbursement.canDeclare) {
+      throw new Error("La obligación no está disponible para abonar.");
+    }
+    const amount = form.amount.trim().replace(",", ".");
+    if (!/^\d+(\.\d{1,2})?$/.test(amount)) {
+      throw new Error("Ingresa un monto positivo con hasta dos decimales.");
+    }
+    const [whole, fraction = ""] = amount.split(".");
+    const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+    if (!Number.isSafeInteger(cents) || cents <= 0 || cents > obligation.available) {
+      throw new Error("El monto debe ser positivo y no superar el saldo disponible.");
+    }
+    const { date } = form;
+    const instant = new Date(date + "T12:00:00Z");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(instant.getTime()) ||
+        instant.toISOString().slice(0, 10) !== date ||
+        date < obligation.reimbursement.earliestDate || date > today) {
+      throw new Error(obligation.loanId
+        ? "La fecha debe estar entre la fecha del préstamo y hoy."
+        : "La fecha debe estar entre el pago al proveedor y hoy.");
+    }
+    const note = form.note.trim();
+    if (note.length > 500) throw new Error("La nota debe tener hasta 500 caracteres.");
+    return { obligationId: obligation.id, amount, date, ...(note ? { note } : {}) };
+  }
+
+  function homeReimbursementScope(tab, obligations, payments) {
+    const matches = (item) => tab !== "charges" || !!item.expenseKind;
+    return {
+      balances: tab === "history" ? [] : obligations.filter((o) => o.reimbursement && matches(o)),
+      entries: payments.filter((p) =>
+        Object.hasOwn(p, "canDecideReimbursement") && matches(p) &&
+        (tab === "history" || p.status === "pending"),
+      ).slice().reverse(),
+    };
+  }
+</script>
+
+<script type="text/babel">
+  const homeReimbursementStatus = {
+    pending: ["Abono declarado · Por confirmar", "warning"],
+    confirmed: ["Pago confirmado", "success"],
+    rejected: ["Abono rechazado", "danger"],
+  };
+  const homeReimbursementCopy = {
+    declare: {
+      title: "Registrar abono", confirm: "Guardar abono", notice: "Abono declarado.",
+      detail: "El importe se reservará y la deuda seguirá igual hasta que el receptor confirme.",
+    },
+    confirm: {
+      title: "Confirmar recepción", confirm: "Confirmar abono", notice: "Pago confirmado.",
+      detail: "Al confirmar, se liberará la reserva y el importe se descontará de la deuda.",
+    },
+    reject: {
+      title: "Rechazar abono", confirm: "Confirmar rechazo", notice: "Abono rechazado.",
+      detail: "Al rechazar, se liberará la reserva y la deuda seguirá igual.",
+    },
+  };
+
+  function HomeReimbursementBalances({ obligation }) {
+    const balances = [
+      ["Saldo pendiente", obligation.pending],
+      ["Reservado por confirmar", obligation.reserved],
+    ];
+    if (obligation.creditReserved > 0) {
+      balances.push(["Reservado para aplicar crédito", obligation.creditReserved]);
+    }
+    balances.push(["Disponible para abonar", obligation.available]);
+    return (
+      <dl className="home-reimbursement-balances">
+        {balances.map(([label, amount]) => (
+          <div key={label}><dt>{label}</dt><dd>{homeMoney(amount)}</dd></div>
+        ))}
+      </dl>
+    );
+  }
+
+  function HomeReimbursementDialog({ action, token, today, name, fallback, onClose, onResult }) {
+    const { obligation, payment, decision, title, trigger } = action;
+    const copy = homeReimbursementCopy[decision || "declare"];
+    const [form, setForm] = React.useState({ amount: "", date: today, note: "", reason: "" });
+    const [payload, setPayload] = React.useState(null);
+    const [pending, setPending] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const command = React.useRef(null);
+    const lock = React.useRef(false);
+    const first = React.useRef(null);
+    const summary = React.useRef(null);
+    const confirm = React.useRef(null);
+    React.useEffect(() => {
+      (payload ? summary : first).current?.focus();
+    }, [payload]);
+    React.useEffect(() => {
+      if (error && command.current && !pending) confirm.current?.focus();
+    }, [error, pending]);
+
+    const change = (key) => (event) => {
+      const value = event.target.value;
+      setForm((current) => ({ ...current, [key]: value }));
+    };
+
+    async function submit(event) {
+      event.preventDefault();
+      if (lock.current) return;
+      setError("");
+      if (!payload) {
+        try {
+          setPayload(homeReimbursementPayload(action, form, today));
+        } catch (err) {
+          setError(err.message);
+        }
+        return;
+      }
+      if (!command.current) {
+        command.current = {
+          id: homeRequestId(),
+          type: decision ? "REIMBURSEMENT_DECIDE" : "REIMBURSEMENT_DECLARE",
+          payload,
+        };
+      }
+      lock.current = true;
+      setPending(true);
+      try {
+        const result = await homeRpc("homeExecute", token, command.current);
+        onResult(result.state, copy.notice);
+      } catch (err) {
+        setError((err.message || String(err)) + " Puedes reintentar este mismo envío sin duplicarlo.");
+      } finally {
+        lock.current = false;
+        setPending(false);
+      }
+    }
+
+    const entry = payment || obligation;
+    return (
+      <HomeDialog title={copy.title} busy={pending} onClose={onClose} trigger={trigger} returnFocusRef={fallback}>
+        <form onSubmit={submit} aria-busy={pending}>
+          {!payload ? (
+            <fieldset className="home-form">
+              <div className="home-info" ref={decision === "confirm" ? first : undefined}
+                tabIndex={decision === "confirm" ? -1 : undefined}>
+                <strong>{title}{payment && " · " + homeMoney(payment.cents)}</strong>
+                <br />Deudor: {name(entry.debtorId)} · Receptor: {name(entry.creditorId)}
+                {payment && <><br />Fecha del abono: {payment.date}</>}
+                {payment?.note && <><br />Nota: {payment.note}</>}
+                {obligation && <HomeReimbursementBalances obligation={obligation} />}
+              </div>
+              {!decision && (
+                <>
+                  <div className="home-form-grid">
+                    <HomeField label="Monto en lempiras" hint="Puedes abonar hasta el saldo disponible.">
+                      <input ref={first} inputMode="decimal" required value={form.amount} onChange={change("amount")} />
+                    </HomeField>
+                    <HomeField label="Fecha del abono"
+                      hint={"Desde " + obligation.reimbursement.earliestDate + " hasta " + today + "."}>
+                      <input type="date" required value={form.date} min={obligation.reimbursement.earliestDate}
+                        max={today} onChange={change("date")} />
+                    </HomeField>
+                  </div>
+                  <HomeField label="Nota (opcional)">
+                    <input type="text" maxLength={500} value={form.note} onChange={change("note")} />
+                  </HomeField>
+                </>
+              )}
+              {decision === "reject" && (
+                <HomeField label="Motivo del rechazo">
+                  <input ref={first} required maxLength={500} value={form.reason} onChange={change("reason")} />
+                </HomeField>
+              )}
+            </fieldset>
+          ) : (
+            <div className="home-review">
+              <h3 tabIndex={-1} ref={summary}>Revisa antes de confirmar</h3>
+              <p><strong>{title} · {homeMoney(payment?.cents ?? Math.round(Number(payload.amount) * 100))}</strong></p>
+              <p>Deudor: {name(entry.debtorId)} · Receptor: {name(entry.creditorId)}</p>
+              <p>Fecha del abono: {payment?.date || payload.date}</p>
+              {(payment?.note || payload.note) && <p>Nota: {payment?.note || payload.note}</p>}
+              {payload.reason && <p>Motivo: {payload.reason}</p>}
+              <p>{copy.detail}</p>
+            </div>
+          )}
+          {error && <HomeNotice>{error}</HomeNotice>}
+          <div className="home-dialog-actions">
+            <button type="button" className="home-btn home-btn-light" disabled={pending}
+              onClick={payload && !command.current ? () => { setPayload(null); setError(""); } : onClose}>
+              {payload && !command.current ? "Volver a editar" : "Cerrar"}
+            </button>
+            <button type="submit" className="home-btn" disabled={pending} ref={confirm}>
+              {pending ? "Guardando…" : error && command.current ? "Reintentar envío" : payload ? copy.confirm : "Revisar datos"}
+            </button>
+          </div>
+        </form>
+      </HomeDialog>
+    );
+  }
+
+  function HomeReimbursements({ tab, obligations, allObligations, payments, token, today, name, onState }) {
+    const { balances, entries } = homeReimbursementScope(tab, obligations, payments);
+    const [action, setAction] = React.useState(null);
+    const [notice, setNotice] = React.useState("");
+    const heading = React.useRef(null);
+    if (tab !== "history" && !balances.length && !entries.length && !notice && !action) return null;
+    return (
+      <section className="home-panel home-reimbursements">
+        <h2 tabIndex={-1} ref={heading}>{tab === "history" ? "Historial de reembolsos" : "Reembolsos entre integrantes"}</h2>
+        {notice && <HomeNotice onDismiss={() => setNotice("")}>{notice}</HomeNotice>}
+        {balances.map((o) => (
+          <article className="home-list-row" key={o.id} aria-label={o.name}>
+            <div>
+              <strong>{o.name}</strong>
+              <small>Deudor: {name(o.debtorId)} · Receptor: {name(o.creditorId)}</small>
+              <small>{o.period || o.date}</small>
+              {o.pendingCorrectionId && <HomeBadge tone="warning">Corrección pendiente</HomeBadge>}
+            </div>
+            <div className="home-right">
+              <HomeReimbursementBalances obligation={o} />
+              {o.reimbursement.canDeclare && (
+                <button type="button" className="home-btn home-btn-light" aria-label={"Registrar abono: " + o.name}
+                  onClick={(e) => setAction({ obligation: o, title: o.name, trigger: e.currentTarget })}>
+                  Registrar abono
+                </button>
+              )}
+            </div>
+          </article>
+        ))}
+        {tab !== "history" && entries.length > 0 && <h3>Abonos pendientes de recepción</h3>}
+        {entries.map((p) => {
+          const title = allObligations.find((o) => o.id === p.obligationId)?.name || "Abono entre integrantes";
+          const [label, tone] = homeReimbursementStatus[p.status];
+          return (
+            <article className="home-list-row" key={p.id} aria-label={title + " · " + label}>
+              <div>
+                <strong>{title}</strong>
+                <small>{name(p.debtorId)} → {name(p.creditorId)} · <time dateTime={p.date}>{p.date}</time></small>
+                {p.note && <small>Nota: {p.note}</small>}
+                {p.reason && <small>Motivo: {p.reason}</small>}
+              </div>
+              <div className="home-right">
+                <strong>{homeMoney(p.cents)}</strong>
+                <HomeBadge tone={tone}>{label}</HomeBadge>
+                {p.canDecideReimbursement && (
+                  <div className="home-actions">
+                    {["confirm", "reject"].map((decision) => (
+                      <button type="button" key={decision}
+                        className={decision === "confirm" ? "home-btn" : "home-btn home-btn-light"}
+                        onClick={(e) => setAction({ payment: p, decision, title, trigger: e.currentTarget })}>
+                        {homeReimbursementCopy[decision].title}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </article>
+          );
+        })}
+        {tab === "history" && !entries.length && <p>No hay abonos para esta selección.</p>}
+        {action && <HomeReimbursementDialog action={action} token={token} today={today} name={name}
+          fallback={heading} onClose={() => setAction(null)}
+          onResult={(state, message) => { onState(state); setNotice(message); setAction(null); }} />}
+      </section>
+    );
+  }
+</script>

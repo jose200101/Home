@@ -278,8 +278,10 @@
       (!personId || p.debtorId === personId || p.creditorId === personId) &&
       (!period || p.date.slice(0, 7) === period),
     );
+    const historicalPayments = filteredPayments.filter((p) => !Object.hasOwn(p, "canDecideReimbursement"));
+    const historicalObligations = obs.filter((o) => !o.reimbursement);
     const pendingPayments = (data?.payments || []).filter(
-      (p) => p.status === "pending",
+      (p) => p.status === "pending" && !Object.hasOwn(p, "canDecideReimbursement"),
     );
     const debtPayment =
       form.obligationId && allObs.find((o) => o.id === form.obligationId);
@@ -474,6 +476,18 @@
               <HomeDashboard data={data} period={period} selected={selected}
                 name={name} onNavigate={setTab} onCreate={() => open("TEMPLATE")} />
             )}
+            {tab === "debts" && (
+              <HomeLoans
+                data={data} token={token} selected={selected} period={period}
+                name={name} onState={setData}
+              />
+            )}
+            {["charges", "debts", "history"].includes(tab) && (
+              <HomeReimbursements
+                key={tab} tab={tab} obligations={obs} allObligations={allObs} payments={filteredPayments}
+                token={token} today={today} name={name} onState={setData}
+              />
+            )}
             {tab === "charges" && (
               <>
                 {data.admin && (
@@ -640,10 +654,6 @@
             )}
             {tab === "debts" && (
               <>
-                <HomeLoans
-                  data={data} token={token} selected={selected} period={period}
-                  name={name} onState={setData}
-                />
                 <div className="home-section-head">
                   <div>
                     <h2>Cuentas entre integrantes y aportes</h2>
@@ -735,7 +745,7 @@
                         </tr>
                       </thead>
                       <tbody role="rowgroup">
-                        {obs.map((o) => (
+                        {historicalObligations.map((o) => (
                           <tr role="row" key={o.id}>
                             <td role="cell" data-label="Concepto">
                               <strong>{o.name}</strong>
@@ -796,7 +806,7 @@
                         ))}
                       </tbody>
                     </table>
-                    {!obs.length && (
+                    {!historicalObligations.length && (
                       <div className="home-empty">
                         No hay cuentas para este filtro.
                       </div>
@@ -918,8 +928,8 @@
             {tab === "history" && (
               <>
                 <section className="home-panel">
-                  <h2>Historial de pagos</h2>
-                  {filteredPayments
+                  <h2>Historial de pagos directos</h2>
+                  {historicalPayments
                     .slice()
                     .reverse()
                     .map((p) => (
@@ -959,7 +969,7 @@
                         </div>
                       </div>
                     ))}
-                  {!filteredPayments.length && (
+                  {!historicalPayments.length && (
                     <HomeEmpty icon="bi-clock-history" title="Sin pagos para esta selección">
                       Los pagos registrados aparecerán aquí.
                     </HomeEmpty>
