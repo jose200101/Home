@@ -423,7 +423,8 @@
           </section>
         ) : (
           <>
-            {!data.admin && !data.me && tab !== "summary" && (
+            {!data.admin && !data.me && tab !== "summary" &&
+              !(tab === "credits" && data.credits.length) && (
               <div className="home-alert">
                 Tu cuenta todavía no está vinculada a un integrante activo. Pide
                 al administrador que la vincule en Integrantes.
@@ -903,27 +904,7 @@
               </>
             )}
             {tab === "credits" && (
-              <section className="home-panel">
-                <h2>Saldos a favor</h2>
-                <p>Los créditos se muestran aparte de los pagos y deudas. El saldo incluye los importes reservados hasta que se confirme una devolución o aplicación.</p>
-                {data.credits?.length ? (
-                  data.credits.slice().reverse().map((credit) => (
-                    <HomeMovement key={credit.id}
-                      title={allObs.find((obligation) => obligation.id === credit.obligationId)?.name || "Crédito por corrección"}
-                      detail={"A favor de " + name(credit.beneficiaryId) + " · A cargo de " + name(credit.holderId)}
-                      cents={credit.pending}>
-                      {credit.reserved > 0 && <small>{homeMoney(credit.reserved)} en reserva</small>}
-                      <HomeBadge tone={credit.pending > 0 ? "success" : "neutral"}>
-                        {credit.pending > 0 ? homeMoney(credit.available) + " disponible" : "Sin saldo"}
-                      </HomeBadge>
-                    </HomeMovement>
-                  ))
-                ) : (
-                  <HomeEmpty icon="bi-wallet2" title="Sin créditos registrados">
-                    Los saldos a favor por correcciones aparecerán aquí.
-                  </HomeEmpty>
-                )}
-              </section>
+              <HomeCredits data={data} token={token} name={name} onState={setData} />
             )}
             {tab === "history" && (
               <>

@@ -11,6 +11,29 @@ function homeCreditBalance_(credit) {
   return credit.cents - credit.returned - credit.applied;
 }
 
+function homeCreditMatchesObligation_(credit, ob) {
+  return !!ob.expenseKind && !ob.loanId &&
+    ob.creditorId === credit.holderId && ob.debtorId === credit.beneficiaryId;
+}
+
+function homeCreditsVisible_(state, result, session) {
+  if (!result.credits.length && !result.creditOperations.length) return;
+  const member = homeAgreementMember_(state, session, false);
+  const paid = new Set(state.charges.filter((charge) => charge.providerStatus === "paid").map((charge) => charge.id));
+  result.credits = result.credits.map((credit) => {
+    const party = member && [credit.holderId, credit.beneficiaryId].includes(member.id);
+    const targets = party && credit.available > 0 ? result.obligations
+      .filter((ob) => homeCreditMatchesObligation_(credit, ob) &&
+        paid.has(ob.sourceId) && !ob.pendingCorrectionId && ob.available > 0)
+      .map((ob) => ({ obligationId: ob.id, limit: Math.min(ob.available, credit.available) })) : [];
+    return { ...credit, canRefund: !!party && member.id === credit.holderId && credit.available > 0, targets };
+  });
+  result.creditOperations = result.creditOperations.map((operation) => ({
+    ...operation,
+    canDecide: !!member && operation.deciderId === member.id && operation.status === "pending",
+  }));
+}
+
 function homeCreditCapacity_(credit, cents, ob) {
   if (
     !Number.isSafeInteger(cents) ||
@@ -19,12 +42,7 @@ function homeCreditCapacity_(credit, cents, ob) {
   )
     throw new Error("El importe supera el crédito disponible.");
   if (!ob) return;
-  if (
-    !ob.expenseKind ||
-    ob.loanId ||
-    ob.creditorId !== credit.holderId ||
-    ob.debtorId !== credit.beneficiaryId
-  )
+  if (!homeCreditMatchesObligation_(credit, ob))
     throw new Error(
       "Solo procede para gastos compartidos pagados entre las mismas dos personas.",
     );

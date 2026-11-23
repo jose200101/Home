@@ -1,0 +1,257 @@
+<script>
+  function homeCreditPayload(action, form) {
+    const { credit, operation, kind } = action;
+    if (operation) {
+      const reason = form.reason.trim();
+      if (!operation.canDecide || !["accept", "reject"].includes(kind))
+        throw new Error("Esta operación no está disponible para responder.");
+      if (kind === "reject" && (!reason || reason.length > 500))
+        throw new Error("Escribe un motivo de rechazo de hasta 500 caracteres.");
+      return { operationId: operation.id, decision: kind, ...(kind === "reject" ? { reason } : {}) };
+    }
+    const target = credit.targets.find((item) => item.obligationId === form.obligationId);
+    if (kind === "refund" ? !credit.canRefund : !target)
+      throw new Error(kind === "refund" ? "La devolución no está disponible." : "Selecciona un gasto disponible para aplicar el crédito.");
+    const amount = form.amount.trim().replace(",", ".");
+    if (!/^\d+(\.\d{1,2})?$/.test(amount))
+      throw new Error("Ingresa un monto positivo con hasta dos decimales.");
+    const [whole, fraction = ""] = amount.split(".");
+    const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+    if (!Number.isSafeInteger(cents) || cents <= 0 || cents > (kind === "refund" ? credit.available : target.limit))
+      throw new Error("El importe debe ser positivo y no superar el límite disponible.");
+    const note = form.note.trim();
+    if (note.length > 500) throw new Error("La nota debe tener hasta 500 caracteres.");
+    return { creditId: credit.id, amount, ...(target && kind === "application" ? { obligationId: target.obligationId } : {}), ...(note ? { note } : {}) };
+  }
+</script>
+
+<script type="text/babel">
+  const homeCreditWorkflow = {
+    refund: { type: "CREDIT_REFUND_DECLARE", label: "Declarar devolución", confirm: "Guardar devolución", notice: "Devolución declarada.", detail: "El importe quedará reservado hasta que el beneficiario confirme la recepción." },
+    application: { type: "CREDIT_APPLY_PROPOSE", label: "Aplicar crédito", confirm: "Enviar propuesta", notice: "Aplicación propuesta.", detail: "El importe se reservará en el crédito y en la obligación hasta que la contraparte responda." },
+    accept: { type: "CREDIT_DECIDE", label: "Aprobar", confirm: "Confirmar aprobación", notice: "Operación confirmada." },
+    reject: { type: "CREDIT_DECIDE", label: "Rechazar", confirm: "Confirmar rechazo", notice: "Operación rechazada.", detail: "Se liberarán las reservas sin consumir el crédito ni reducir la deuda." },
+  };
+  const homeCreditStatuses = { pending: ["Pendiente", "warning"], confirmed: ["Confirmado", "success"], rejected: ["Rechazado", "danger"] };
+  const homeCreditKind = (operation) => operation.kind === "refund" ? "Devolución" : "Aplicación de crédito";
+
+  function HomeCreditDialog({ action, token, name, origin, obligationName, fallback, onClose, onResult }) {
+    const { kind, operation, credit, trigger } = action;
+    const copy = homeCreditWorkflow[kind];
+    const [form, setForm] = React.useState({ obligationId: "", amount: "", note: "", reason: "" });
+    const [payload, setPayload] = React.useState(null);
+    const [busy, setBusy] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const command = React.useRef(null);
+    const lock = React.useRef(false);
+    const first = React.useRef(null);
+    const review = React.useRef(null);
+    const confirm = React.useRef(null);
+    React.useEffect(() => { (payload ? review : first).current?.focus(); }, [payload]);
+    React.useEffect(() => { if (error && command.current && !busy) confirm.current?.focus(); }, [error, busy]);
+    const change = (key) => (event) => {
+      const value = event.target.value;
+      setForm((previous) => ({ ...previous, [key]: value }));
+    };
+    const limit = kind === "application"
+      ? credit.targets.find((target) => target.obligationId === form.obligationId)?.limit : credit.available;
+    const detail = copy.detail || (operation.kind === "refund"
+      ? "El importe confirmado se descontará del crédito pendiente."
+      : "El importe confirmado se descontará del crédito y de la obligación.");
+
+    async function submit(event) {
+      event.preventDefault();
+      if (lock.current) return;
+      setError("");
+      if (!payload) {
+        try { setPayload(homeCreditPayload(action, form)); }
+        catch (err) { setError(err.message); }
+        return;
+      }
+      if (!command.current) command.current = { id: homeRequestId(), type: copy.type, payload };
+      lock.current = true;
+      setBusy(true);
+      try {
+        const result = await homeRpc("homeExecute", token, command.current);
+        onResult(result.state, copy.notice);
+      } catch (err) {
+        setError((err.message || String(err)) + " Puedes reintentar este mismo envío sin duplicarlo.");
+      } finally {
+        lock.current = false;
+        setBusy(false);
+      }
+    }
+
+    const originLabel = origin(credit);
+    const targetId = operation?.obligationId || payload?.obligationId;
+    return (
+      <HomeDialog title={copy.label} busy={busy} trigger={trigger} returnFocusRef={fallback} onClose={onClose}>
+        <form onSubmit={submit} aria-busy={busy}>
+          {!payload ? (
+            <fieldset className="home-form">
+              <div className="home-info" ref={kind === "accept" ? first : undefined} tabIndex={kind === "accept" ? -1 : undefined}>
+                <strong>{originLabel}</strong>
+                <br />A favor de {name(credit.beneficiaryId)} · A cargo de {name(credit.holderId)}
+                {operation && <><br />{homeCreditKind(operation)} · {homeMoney(operation.cents)}</>}
+                {targetId && <><br />Gasto: {obligationName(targetId)}</>}
+              </div>
+              {kind === "application" && (
+                <HomeField label="Gasto donde aplicar el crédito">
+                  <select ref={first} required value={form.obligationId} onChange={change("obligationId")}>
+                    <option value="">Selecciona un gasto</option>
+                    {credit.targets.map((target) => <option key={target.obligationId} value={target.obligationId}>{obligationName(target.obligationId)} · hasta {homeMoney(target.limit)}</option>)}
+                  </select>
+                </HomeField>
+              )}
+              {!operation && <>
+                <HomeField label="Monto en lempiras" hint={limit == null ? "Selecciona un gasto para ver el límite." : "Disponible para esta operación: " + homeMoney(limit)}>
+                  <input ref={kind === "refund" ? first : undefined} inputMode="decimal" required value={form.amount} onChange={change("amount")} />
+                </HomeField>
+                <HomeField label="Nota (opcional)">
+                  <input type="text" maxLength={500} value={form.note} onChange={change("note")} />
+                </HomeField>
+              </>}
+              {kind === "reject" && <HomeField label="Motivo del rechazo">
+                <input ref={first} required maxLength={500} value={form.reason} onChange={change("reason")} />
+              </HomeField>}
+            </fieldset>
+          ) : (
+            <div className="home-review">
+              <h3 ref={review} tabIndex={-1}>Revisa antes de confirmar</h3>
+              <p><strong>{originLabel} · {homeMoney(operation?.cents ?? Math.round(Number(payload.amount) * 100))}</strong></p>
+              <p>A favor de {name(credit.beneficiaryId)} · A cargo de {name(credit.holderId)}</p>
+              {operation && <p>{homeCreditKind(operation)}</p>}
+              {targetId && <p>Gasto: {obligationName(targetId)}</p>}
+              {(operation?.note || payload.note) && <p>Nota: {operation?.note || payload.note}</p>}
+              {payload.reason && <p>Motivo: {payload.reason}</p>}
+              <p>{detail}</p>
+            </div>
+          )}
+          {error && <HomeNotice>{error}</HomeNotice>}
+          <div className="home-dialog-actions">
+            <button type="button" className="home-btn home-btn-light" disabled={busy}
+              onClick={payload && !command.current ? () => { setPayload(null); setError(""); } : onClose}>
+              {payload && !command.current ? "Volver a editar" : "Cerrar"}
+            </button>
+            <button type="submit" className="home-btn" disabled={busy} ref={confirm}>
+              {busy ? "Guardando…" : error && command.current ? "Reintentar envío" : payload ? copy.confirm : "Revisar datos"}
+            </button>
+          </div>
+        </form>
+      </HomeDialog>
+    );
+  }
+
+  function HomeCreditOperations({ title, entries, labels, credits, origin, obligationName, name, onAction }) {
+    return (
+      <section className="home-panel home-credit-operations">
+        <h2>{title}</h2>
+        {!entries.length && <p>No hay operaciones para esta vista.</p>}
+        {entries.map((operation) => {
+          const credit = credits.get(operation.creditId);
+          const [status, tone] = homeCreditStatuses[operation.status];
+          return (
+            <article className="home-list-row" key={operation.id} aria-label={labels.get(operation.id)}>
+              <div>
+                <strong>{homeCreditKind(operation)} · {origin(credit)}</strong>
+                <small>{name(operation.personId)} → {name(operation.deciderId)} · {homeDashboardDate(operation.decidedAt || operation.declaredAt)}</small>
+                {operation.obligationId && <small>Gasto: {obligationName(operation.obligationId)}</small>}
+                {operation.note && <small>Nota: {operation.note}</small>}
+                {operation.reason && <small>Motivo: {operation.reason}</small>}
+              </div>
+              <div className="home-right">
+                <strong>{homeMoney(operation.cents)}</strong>
+                <HomeBadge tone={tone}>{status}</HomeBadge>
+                {operation.status === "pending" && <small>{operation.canDecide ? "Pendiente de tu respuesta" : "Respuesta pendiente de " + name(operation.deciderId)}</small>}
+                {operation.canDecide && credit && <div className="home-actions">
+                  {["accept", "reject"].map((kind) => <button type="button" key={kind}
+                    className={kind === "accept" ? "home-btn" : "home-btn home-btn-light"}
+                    aria-label={homeCreditWorkflow[kind].label + ": " + labels.get(operation.id)}
+                    onClick={(event) => onAction({ kind, operation, credit, trigger: event.currentTarget })}>
+                    {homeCreditWorkflow[kind].label}
+                  </button>)}
+                </div>}
+              </div>
+            </article>
+          );
+        })}
+      </section>
+    );
+  }
+
+  function HomeCredits({ data, token, name, onState }) {
+    const [selected, setSelected] = React.useState("");
+    const [action, setAction] = React.useState(null);
+    const [notice, setNotice] = React.useState("");
+    const heading = React.useRef(null);
+    const matches = (item) => !data.admin || !selected || [item.holderId, item.beneficiaryId].includes(selected);
+    const credits = data.credits.filter(matches).slice().reverse();
+    const operations = data.creditOperations.filter(matches).slice().reverse();
+    const creditById = new Map(credits.map((c) => [c.id, c]));
+    const totals = credits.reduce((sum, c) => ({
+      pending: sum.pending + c.pending, reserved: sum.reserved + c.reserved, available: sum.available + c.available,
+    }), { pending: 0, reserved: 0, available: 0 });
+    const obligationLabels = homeDistinctLabels(data.obligations, (o) =>
+      [o.name, o.period || o.date, o.due && "vence " + o.due].filter(Boolean).join(", "));
+    const obligationName = (id) => obligationLabels.get(id) || "Gasto asociado";
+    const origin = (credit) => credit ? obligationLabels.get(credit.obligationId) || "Crédito por corrección" : "Crédito por corrección";
+    const creditLabels = homeDistinctLabels(credits, (c) => [origin(c), name(c.beneficiaryId), name(c.holderId), homeMoney(c.available)].join(", "));
+    const operationLabels = homeDistinctLabels(operations, (op) =>
+      [homeCreditKind(op), origin(creditById.get(op.creditId)), name(op.personId), homeDashboardDate(op.declaredAt), homeMoney(op.cents)].join(", "));
+    const operationProps = { labels: operationLabels, credits: creditById, origin, obligationName, name, onAction: setAction };
+    return (
+      <>
+        <div className="home-section-head">
+          <div>
+            <h2 ref={heading} tabIndex={-1}>Saldos a favor</h2>
+            <p>El saldo se consume al confirmar una devolución o aplicación.</p>
+          </div>
+          {data.admin && <HomeField label="Consultar integrante">
+            <select value={selected} onChange={(event) => setSelected(event.target.value)}>
+              <option value="">Todo el hogar</option>
+              {data.people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+            </select>
+          </HomeField>}
+        </div>
+        {!data.admin && !data.me && credits.length > 0 &&
+          <p className="home-info">Aunque tu vínculo esté inactivo, puedes gestionar los créditos existentes según tus permisos.</p>}
+        {notice && <HomeNotice onDismiss={() => setNotice("")}>{notice}</HomeNotice>}
+        <div className="home-stats home-credit-summary">
+          <HomeSummaryCard label="Crédito pendiente" value={homeMoney(totals.pending)} icon="bi-wallet2" />
+          <HomeSummaryCard label="Reservado" value={homeMoney(totals.reserved)} icon="bi-hourglass" />
+          <HomeSummaryCard label="Disponible" value={homeMoney(totals.available)} icon="bi-check-circle" emphasis />
+        </div>
+        <section className="home-panel">
+          <h2>Créditos por corrección</h2>
+          {!credits.length && <HomeEmpty icon="bi-wallet2" title="Sin créditos registrados">Los saldos a favor por correcciones aparecerán aquí.</HomeEmpty>}
+          {credits.map((credit) => (
+            <article className="home-list-row" key={credit.id} aria-label={creditLabels.get(credit.id)}>
+              <div>
+                <strong>{origin(credit)}</strong>
+                <small>A favor de {name(credit.beneficiaryId)} · A cargo de {name(credit.holderId)}</small>
+              </div>
+              <div className="home-right">
+                <strong>{homeMoney(credit.available)} disponible</strong>
+                <small>{homeMoney(credit.pending)} pendiente · {homeMoney(credit.reserved)} reservado</small>
+                <div className="home-actions">
+                  {[...(credit.canRefund ? ["refund"] : []), ...(credit.targets.length ? ["application"] : [])].map((kind) =>
+                    <button className="home-btn home-btn-light" type="button" key={kind}
+                      aria-label={homeCreditWorkflow[kind].label + ": " + creditLabels.get(credit.id)}
+                      onClick={(event) => setAction({ kind, credit, trigger: event.currentTarget })}>
+                      {homeCreditWorkflow[kind].label}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </article>
+          ))}
+        </section>
+        <HomeCreditOperations title="Pendientes de aprobación" entries={operations.filter((op) => op.status === "pending")} {...operationProps} />
+        <HomeCreditOperations title="Historial de devoluciones y aplicaciones" entries={operations.filter((op) => op.status !== "pending")} {...operationProps} />
+        {action && <HomeCreditDialog action={action} token={token} name={name} origin={origin} obligationName={obligationName}
+          fallback={heading} onClose={() => setAction(null)}
+          onResult={(state, message) => { onState(state); setNotice(message); setAction(null); }} />}
+      </>
+    );
+  }
+</script>
