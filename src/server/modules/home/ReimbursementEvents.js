@@ -16,6 +16,34 @@ function homeReimbursementAccess_(state, session, personId) {
     throw new Error("Operación de reembolso no disponible para esta cuenta.");
 }
 
+function homeReimbursementEarliest_(obligation, charges) {
+  return obligation.loanId
+    ? obligation.date
+    : charges.find((charge) => charge.id === obligation.sourceId)?.paidDate;
+}
+
+function homeReimbursementsVisible_(state, result, session) {
+  if (!result.obligations.some(homeUsesParticipantPayments_) &&
+      !result.payments.some((payment) => payment.schema === HOME_REIMBURSEMENT_SCHEMA_)) return;
+  const member = homeAgreementMember_(state, session, false);
+  result.obligations = result.obligations.map((obligation) => {
+    if (!homeUsesParticipantPayments_(obligation) || !obligation.creditorId) return obligation;
+    const earliestDate = homeReimbursementEarliest_(obligation, state.charges) || "";
+    return {
+      ...obligation,
+      reimbursement: {
+        earliestDate,
+        canDeclare: !!member && member.id === obligation.debtorId &&
+          !obligation.pendingCorrectionId && obligation.available > 0 && !!earliestDate &&
+          earliestDate <= result.today,
+      },
+    };
+  });
+  result.payments = result.payments.map((payment) => payment.schema === HOME_REIMBURSEMENT_SCHEMA_
+    ? { ...payment, canDecideReimbursement: !!member && member.id === payment.creditorId && payment.status === "pending" }
+    : payment);
+}
+
 function homeReimbursementCommand_(request, state, session) {
   const p = request.payload || {};
   if (request.type === "REIMBURSEMENT_DECLARE") {
@@ -31,10 +59,8 @@ function homeReimbursementCommand_(request, state, session) {
     if (cents > ob.available)
       throw new Error("El abono supera el saldo disponible.");
     const date = homeDate_(p.date);
-    const earliest = ob.loanId
-      ? ob.date
-      : state.charges.find((item) => item.id === ob.sourceId).paidDate;
-    if (date < earliest || date > homeToday_())
+    const earliest = homeReimbursementEarliest_(ob, state.charges);
+    if (!earliest || date < earliest || date > homeToday_())
       throw new Error(
         ob.loanId
           ? "La fecha debe estar entre la fecha del préstamo y hoy."

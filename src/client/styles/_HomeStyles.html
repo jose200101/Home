@@ -304,6 +304,31 @@
   .home-loan-list .home-actions {
     justify-content: flex-end;
   }
+  .home-reimbursements .home-actions {
+    justify-content: flex-end;
+  }
+  .home-reimbursement-balances {
+    display: grid;
+    gap: .25rem;
+    margin: 0;
+  }
+  .home-reimbursement-balances > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: .75rem;
+    align-items: baseline;
+  }
+  .home-reimbursement-balances dt {
+    font-weight: 500;
+  }
+  .home-reimbursement-balances dd {
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    margin: 0;
+  }
+  .home-info .home-reimbursement-balances {
+    margin-top: .65rem;
+  }
   .home-muted {
     opacity: 0.7;
   }
