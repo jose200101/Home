@@ -114,3 +114,79 @@ test("la actividad por integrante respeta la proyección real y excluye auditor�
     assert.equal(result.attention, 0);
   }
 });
+
+test("solicitudes y pagos pendientes distinguen emisor, destinatario y administración", () => {
+  const pending = { status: "pending", date: "2026-11-23", cents: 1000 };
+  const state = {
+    ...base,
+    payments: [
+      { ...pending, id: "payment-in", debtorId: "luis", creditorId: "ana" },
+      { ...pending, id: "payment-out", debtorId: "ana", creditorId: "luis" },
+      { ...pending, id: "payment-done", debtorId: "luis", creditorId: "ana", status: "confirmed" },
+    ],
+    loans: [
+      { ...pending, id: "loan-in", debtorId: "ana", creditorId: "luis" },
+      { ...pending, id: "loan-out", debtorId: "luis", creditorId: "ana" },
+    ],
+  };
+  state.audit = [...state.payments, ...state.loans].map(({ id, date }) => ({ id, at: date }));
+  const labels = (view) => Object.fromEntries(view.activity.map(
+    ({ key, pendingLabel }) => [key.split(":")[1], pendingLabel],
+  ));
+  const member = model({ ...state, admin: false, me: "ana" }, "maria", "");
+  assert.deepEqual(labels(member), {
+    "payment-in": "Pago por confirmar",
+    "payment-out": "Pago enviado, pendiente de confirmación",
+    "payment-done": undefined,
+    "loan-in": "Pendiente de tu respuesta",
+    "loan-out": "Esperando respuesta del otro integrante",
+  });
+  assert.equal(member.activity.find(({ key }) => key === "payment:payment-done").status, "confirmed");
+  assert.deepEqual(labels(model(state, "ana", "")), {
+    ...labels(member), "loan-in": "Pendiente de respuesta del integrante seleccionado",
+  });
+  assert.equal(labels(model({ ...state, me: "ana" }, "ana", ""))["loan-in"], "Pendiente de tu respuesta");
+  assert.deepEqual(labels(model(state, "", "")), {
+    "payment-in": "Pago por confirmar",
+    "payment-out": "Pago por confirmar",
+    "payment-done": undefined,
+    "loan-in": "Respuesta pendiente",
+    "loan-out": "Respuesta pendiente",
+  });
+
+  const older = model({ ...state, admin: false, me: "ana" }, "", "2026-10");
+  assert.equal(older.activity.length, 0);
+  assert.equal(older.attention, member.attention);
+  assert.deepEqual(plain(older.credits), plain(member.credits));
+  assert.deepEqual([member.memberDue, member.providerDue, member.receivable], [10500, 7000, 10000]);
+  assert.deepEqual([older.memberDue, older.providerDue, older.receivable], [2500, 0, 0]);
+});
+
+test("correcciones y créditos identifican quién debe decidir y conservan estados finales", () => {
+  const state = {
+    ...base,
+    admin: false,
+    me: "ana",
+    corrections: [{
+      id: "correction", debtorId: "ana", creditorId: "luis", status: "pending",
+      date: "2026-11-23", decisions: [{ personId: "ana" }],
+    }],
+    creditOperations: [
+      { id: "refund", kind: "refund", holderId: "luis", beneficiaryId: "ana", deciderId: "ana", status: "pending", declaredAt: "2026-11-23" },
+      { id: "apply", holderId: "ana", beneficiaryId: "luis", deciderId: "luis", status: "pending", declaredAt: "2026-11-23" },
+    ],
+    loans: ["accepted", "rejected", "cancelled"].map((status) => ({
+      id: status, debtorId: "ana", creditorId: "luis", status, decidedAt: "2026-11-23",
+    })),
+  };
+  const result = model(state, "", "");
+  const byKey = Object.fromEntries(result.activity.map((item) => [item.key, item]));
+  assert.equal(byKey["correction:correction"].pendingLabel, "Esperando respuesta del otro integrante");
+  assert.equal(byKey["credit:refund"].pendingLabel, "Pendiente de tu respuesta");
+  assert.equal(byKey["credit:apply"].pendingLabel, "Esperando respuesta del otro integrante");
+  for (const status of ["accepted", "rejected", "cancelled"]) {
+    assert.equal(byKey["loan:" + status].status, status);
+    assert.equal(byKey["loan:" + status].pendingLabel, undefined);
+  }
+  assert.equal(result.attention, 1);
+});

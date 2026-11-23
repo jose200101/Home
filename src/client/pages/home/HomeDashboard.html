@@ -52,23 +52,46 @@
       .filter((person) => person.active && (data.admin ? Boolean(person.userId) : person.id === data.me))
       .map((person) => person.id));
     const canRespond = (id) => eligible.has(id) && (household || id === personId);
+    const pendingAudit = new Map();
 
-    function addActivity(kind, item, at, label, amount, otherParty) {
+    function pendingLabelFor(kind, deciders) {
+      if (kind === "payment") {
+        return personId && deciders.some((id) => id && id !== personId)
+          ? "Pago enviado, pendiente de confirmación"
+          : "Pago por confirmar";
+      }
+      if (personId && deciders.includes(personId) && canRespond(personId)) {
+        return personId === data.me
+          ? "Pendiente de tu respuesta"
+          : "Pendiente de respuesta del integrante seleccionado";
+      }
+      if (personId && !deciders.includes(personId) && deciders.some(Boolean)) {
+        return "Esperando respuesta del otro integrante";
+      }
+      return "Respuesta pendiente";
+    }
+
+    function addActivity(kind, item, at, label, amount, deciders, otherParty) {
+      const pendingLabel = item.status === "pending" ? pendingLabelFor(kind, deciders) : undefined;
+      if (household) {
+        if (pendingLabel) pendingAudit.set(item.id, pendingLabel);
+        return;
+      }
       if (!homeDashboardDate(at) || !withinPeriod(at)) return;
-      activity.push({ key: kind + ":" + item.id, at, label, amount, status: item.status, detail: item.name, otherParty });
+      activity.push({ key: kind + ":" + item.id, at, label, amount, status: item.status, pendingLabel, detail: item.name, otherParty });
     }
 
     for (const payment of data.payments || []) {
       if (payment.status === "pending" && canRespond(payment.creditorId)) counts.payments++;
-      if (matchesPerson(payment.debtorId, payment.creditorId))
+      if (household || matchesPerson(payment.debtorId, payment.creditorId))
         addActivity("payment", payment, payment.decidedAt || payment.declaredAt || payment.date,
-          "Pago", payment.cents, payment.creditorId === personId ? payment.debtorId : payment.creditorId);
+          "Pago", payment.cents, [payment.creditorId], payment.creditorId === personId ? payment.debtorId : payment.creditorId);
     }
     for (const loan of data.loans || []) {
       if (loan.status === "pending" && canRespond(loan.debtorId)) counts.loans++;
-      if (matchesPerson(loan.debtorId, loan.creditorId))
+      if (household || matchesPerson(loan.debtorId, loan.creditorId))
         addActivity("loan", loan, loan.decidedAt || loan.requestedAt || loan.date,
-          "Préstamo", loan.cents, loan.creditorId === personId ? loan.debtorId : loan.creditorId);
+          "Préstamo", loan.cents, [loan.debtorId], loan.creditorId === personId ? loan.debtorId : loan.creditorId);
     }
     for (const { pending } of data.agreements || []) {
       if (pending?.status === "pending" && pending.participants.some(
@@ -76,23 +99,25 @@
       )) counts.agreements++;
     }
     for (const correction of data.corrections || []) {
-      if (correction.status === "pending" && [correction.debtorId, correction.creditorId].some(
-        (id) => canRespond(id) && !correction.decisions.some((decision) => decision.personId === id),
-      )) counts.corrections++;
-      if (matchesPerson(correction.debtorId, correction.creditorId))
-        addActivity("correction", correction, correction.decidedAt || correction.date, "Corrección", correction.proposedCents);
+      const deciders = correction.status === "pending" ? [correction.debtorId, correction.creditorId].filter(
+        (id) => !correction.decisions.some((decision) => decision.personId === id),
+      ) : [];
+      if (deciders.some(canRespond)) counts.corrections++;
+      if (household || matchesPerson(correction.debtorId, correction.creditorId))
+        addActivity("correction", correction, correction.decidedAt || correction.date, "Corrección", correction.proposedCents, deciders);
     }
     for (const operation of data.creditOperations || []) {
       if (operation.status === "pending" && canRespond(operation.deciderId)) counts.credits++;
-      if (matchesPerson(operation.holderId, operation.beneficiaryId))
+      if (household || matchesPerson(operation.holderId, operation.beneficiaryId))
         addActivity("credit", operation, operation.decidedAt || operation.declaredAt,
-          operation.kind === "refund" ? "Devolución de crédito" : "Aplicación de crédito", operation.cents);
+          operation.kind === "refund" ? "Devolución de crédito" : "Aplicación de crédito", operation.cents, [operation.deciderId]);
     }
     if (household) {
       for (const event of data.audit || []) {
         if (homeDashboardDate(event.at) && withinPeriod(event.at)) activity.push({
           key: "audit:" + event.id, at: event.at, type: event.type, detail: event.note,
-          status: event.voided ? "voided" : "",
+          status: event.voided ? "voided" : pendingAudit.has(event.id) ? "pending" : "",
+          pendingLabel: pendingAudit.get(event.id),
         });
       }
     }
@@ -207,7 +232,7 @@
         <section className="home-panel">
           <h2>Actividad reciente</h2>
           {view.activity.length ? view.activity.map((record) => {
-            const { label, detail, otherParty, type, status, amount, at } = record;
+            const { label, detail, otherParty, type, status, pendingLabel, amount, at } = record;
             return (
               <div className="home-list-row" key={record.key}>
                 <div>
@@ -216,7 +241,7 @@
                 </div>
                 <div className="home-right">
                   {amount !== undefined && <strong>{homeMoney(amount)}</strong>}
-                  <HomeDashboardStatus status={status} pendingLabel={label === "Pago" ? "Por confirmar" : "Por responder"} />
+                  <HomeDashboardStatus status={status} pendingLabel={pendingLabel} />
                   <small><time dateTime={at}>{activityDate(at)}</time></small>
                 </div>
               </div>

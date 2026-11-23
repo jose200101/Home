@@ -452,7 +452,9 @@
                     <strong>{data.me ? name(data.me) : "Mi cuenta"}</strong>
                   </div>
                 )}
-                <HomeField label="Período" hint={tab === "summary" && period ? "El filtro se aplica a cuentas y actividad." : undefined}>
+                <HomeField label="Período" hint={tab === "summary" && period
+                  ? "El período filtra las cuentas y la actividad. Los créditos y las operaciones que requieren atención muestran su estado actual."
+                  : undefined}>
                   <input
                     aria-label="Período"
                     type="month"
