@@ -47,17 +47,38 @@ function homeCheckCorrectionCapacity_(ob, amount) {
     );
 }
 
+function homeCorrectionObligation_(ob) {
+  return homeUsesParticipantPayments_(ob) && !!ob.creditorId && ob.debtorId !== ob.creditorId;
+}
+
+function homeCorrectionsVisible_(state, result, session) {
+  if (session.admin) {
+    result.obligations = result.obligations.map((ob) => {
+      if (!homeCorrectionObligation_(ob)) return ob;
+      const minimum = ob.appliedCreditCents || 0;
+      const blocked = ob.pendingCorrectionId ? "Ya existe una corrección pendiente."
+        : ob.reserved || ob.creditReserved ? "Resuelve las reservas pendientes antes de corregir."
+        : "";
+      return { ...ob, correctionOffer: { minimum, blocked } };
+    });
+  }
+  if (!result.corrections.length) return;
+  const member = homeAgreementMember_(state, session, false);
+  result.corrections = result.corrections.map((correction) => ({
+    ...correction,
+    canDecide: !!member && correction.status === "pending" &&
+      [correction.debtorId, correction.creditorId].includes(member.id) &&
+      !correction.decisions.some((entry) => entry.personId === member.id),
+  }));
+}
+
 function homeCorrectionCommand_(request, state, session) {
   const p = request.payload || {};
   if (request.type === "CORRECTION_PROPOSE") {
     if (!session.admin)
       throw new Error("Esta operación requiere administrador.");
     const ob = state.obligations.find(
-      (o) =>
-        o.id === p.obligationId &&
-        homeUsesParticipantPayments_(o) &&
-        o.creditorId &&
-        o.debtorId !== o.creditorId,
+      (o) => o.id === p.obligationId && homeCorrectionObligation_(o),
     );
     if (!ob) throw new Error("Obligación no disponible para corrección.");
     if (ob.pendingCorrectionId)

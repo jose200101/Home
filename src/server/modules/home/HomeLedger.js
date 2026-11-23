@@ -402,6 +402,7 @@ function homeVisible_(state, session) {
   result.loans = homeLoansVisible_(state, session, result.loans);
   homeReimbursementsVisible_(state, result, session);
   homeCreditsVisible_(state, result, session);
+  homeCorrectionsVisible_(state, result, session);
   result.creditTotals = homeCreditTotals_(result.credits);
   return result;
 }

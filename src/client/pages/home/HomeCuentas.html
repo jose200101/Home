@@ -489,6 +489,11 @@
                 token={token} today={today} name={name} onState={setData}
               />
             )}
+            {["charges", "debts", "history"].includes(tab) && (
+              <HomeCorrections key={"corrections-" + tab} tab={tab} data={data} obligations={obs}
+                personId={personId} period={period} token={token} name={name}
+                onState={setData} onCredits={() => setTab("credits")} />
+            )}
             {tab === "charges" && (
               <>
                 {data.admin && (

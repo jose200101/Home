@@ -9,8 +9,9 @@ function viewScript(name) {
   const html = fs.readFileSync(path.join(__dirname, "../dist/Frontend/views", name + ".html"), "utf8");
   return html.match(/<script>([\s\S]*?)<\/script>/)[1];
 }
-const { homeCreditPayload, homeDistinctLabels } = vm.runInNewContext(
-  viewScript("HomeCredits") + viewScript("HomeReimbursements") + "\n({ homeCreditPayload, homeDistinctLabels })",
+const { homeCreditPayload, homeDistinctLabels, homeCorrectionPayload } = vm.runInNewContext(
+  viewScript("HomeCredits") + viewScript("HomeReimbursements") + viewScript("HomeCorrections") +
+    "\n({ homeCreditPayload, homeDistinctLabels, homeCorrectionPayload })",
 );
 
 function fixture() {
@@ -159,6 +160,54 @@ function fixture() {
     denied,
   };
 }
+
+test("la interfaz usa la versión proyectada y las acciones siguen a las partes desactivadas", () => {
+  const f = fixture();
+  const ob = () => f.balance();
+  assert.equal(f.state("luis").obligations[0].correctionOffer, undefined);
+  const original = homeCorrectionPayload({ obligation: ob() }, { amount: "0", reason: " Cuenta revisada " });
+  assert.equal(original.expectedVersion, 0);
+  assert.equal(original.amount, "0");
+  const proposal = f.h.execute("CORRECTION_PROPOSE", original, "admin", "ui-correction-request");
+  assert(f.h.execute("CORRECTION_PROPOSE", original, "admin", "ui-correction-request").duplicate);
+  assert.match(ob().correctionOffer.blocked, /pendiente/);
+  for (const p of [f.ana, f.luis]) {
+    f.h.execute("PERSON", { id: p.id, name: p.name, userId: p.userId, active: false });
+  }
+  const correction = (user) => f.state(user).corrections[0];
+  assert.equal(f.state("luis").me, "");
+  assert.equal(correction("luis").canDecide, true);
+  assert.equal(correction("admin").canDecide, false);
+  assert.equal(correction("maria"), undefined);
+  const approve = homeCorrectionPayload({ kind: "accept", correction: correction("luis") }, { reason: "" });
+  assert.equal(approve.version, 1);
+  f.h.execute("CORRECTION_DECIDE", approve, "luis");
+  assert.equal(correction("luis").canDecide, false);
+  assert.equal(correction("ana").canDecide, true);
+  assert.equal(ob().effectiveCents ?? ob().cents, 60000);
+  assert.throws(() => homeCorrectionPayload({ kind: "reject", correction: correction("ana") }, { reason: " " }), /motivo/);
+  const reject = homeCorrectionPayload({ kind: "reject", correction: correction("ana") }, { reason: " Importe incorrecto " });
+  f.h.execute("CORRECTION_DECIDE", reject, "ana");
+  assert.equal(correction("ana").canDecide, false);
+  assert.equal(correction("ana").decisions[1].reason, "Importe incorrecto");
+  assert.equal(homeCorrectionPayload({ obligation: ob() }, { amount: "700", reason: "Importe revisado" }).expectedVersion, 1);
+  f.denied(() => f.h.execute("CORRECTION_PROPOSE", original, "admin"), /desactualizada/);
+});
+
+test("las reservas y el crédito aplicado se reflejan sin recalcular la obligación", () => {
+  const f = fixture();
+  const creditId = f.credit();
+  const target = f.expense("destino-ui").obligation;
+  const allocation = f.apply(creditId, target, "40");
+  const draft = { amount: "30", reason: "Conciliado" };
+  assert.match(f.balance(target).correctionOffer.blocked, /reservas/);
+  assert.throws(() => homeCorrectionPayload({ obligation: f.balance(target) }, draft), /reservas/);
+  f.decide(allocation, "ana");
+  assert.equal(f.balance(target).correctionOffer.minimum, 4000);
+  assert.throws(() => homeCorrectionPayload({ obligation: f.balance(target) }, draft), /crédito ya aplicado/);
+  f.declare("10", target);
+  assert.match(f.balance(target).correctionOffer.blocked, /reservas/);
+});
 
 test("la proyección ofrece destinos compatibles y acciones de sesión aunque los integrantes estén archivados", () => {
   const f = fixture();
