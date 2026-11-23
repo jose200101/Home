@@ -795,7 +795,7 @@
                               {p.date} · {p.note}
                             </small>
                           </div>
-                          {!p.expenseKind &&
+                          {!p.expenseKind && !p.loanId &&
                           (data.admin || data.me === p.creditorId) ? (
                             <div className="home-actions">
                               <button
@@ -847,7 +847,8 @@
                             <td>
                               <strong>{o.name}</strong>
                               <small>
-                                {o.period || o.date} · vence {o.due}
+                                {o.period || o.date}
+                                {o.due ? " · vence " + o.due : " · sin vencimiento"}
                               </small>
                             </td>
                             <td>{name(o.debtorId)}</td>
@@ -861,7 +862,7 @@
                               )}
                             </td>
                             <td>
-                              {!o.expenseKind && o.pending - o.reserved > 0 &&
+                              {!o.expenseKind && !o.loanId && o.pending - o.reserved > 0 &&
                                 (data.admin || data.me === o.debtorId) &&
                                 (!!o.creditorId || data.admin) && (
                                   <button
@@ -937,7 +938,7 @@
                               }[p.status]
                             }
                           </span>
-                          {data.admin && !p.expenseKind && (
+                          {data.admin && !p.expenseKind && !p.loanId && (
                             <button
                               className="home-link home-danger"
                               onClick={() =>

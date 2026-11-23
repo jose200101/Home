@@ -121,5 +121,9 @@ module.exports = [
   [
     "src/server/modules/home/ReimbursementEvents.js",
     "Backend/ReimbursementEvents.js"
+  ],
+  [
+    "src/server/modules/home/LoanEvents.js",
+    "Backend/LoanEvents.js"
   ]
 ];
