@@ -166,7 +166,7 @@ test("factura exige pago íntegro propio y crea reembolsos una sola vez", () => 
   assert.equal(ob.sourceId, chargeId);
   assert.equal(f.state().charges[0].providerStatus, "paid");
   assert.equal(f.state().plan.length, 0);
-  f.denied(() => f.h.execute("PAYMENT", { obligationId: ob.id }), /aún no/);
+  f.denied(() => f.h.execute("PAYMENT", { obligationId: ob.id }), /comando de reembolsos/);
 
   const recovered = createHarness();
   const sheet = recovered.db.insertSheet("HOME_EVENTOS");

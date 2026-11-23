@@ -795,7 +795,8 @@
                               {p.date} · {p.note}
                             </small>
                           </div>
-                          {data.admin || data.me === p.creditorId ? (
+                          {!p.expenseKind &&
+                          (data.admin || data.me === p.creditorId) ? (
                             <div className="home-actions">
                               <button
                                 className="home-btn"
@@ -936,7 +937,7 @@
                               }[p.status]
                             }
                           </span>
-                          {data.admin && (
+                          {data.admin && !p.expenseKind && (
                             <button
                               className="home-link home-danger"
                               onClick={() =>
