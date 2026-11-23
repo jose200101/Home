@@ -58,16 +58,17 @@
     );
   }
 
-  function HomeDialog({ title, onClose, busy, children }) {
+  function HomeDialog({ title, onClose, busy, trigger, returnFocusRef, children }) {
     const ref = React.useRef(null);
     const titleId = React.useId();
     React.useEffect(() => {
       const el = ref.current;
-      const trigger = document.activeElement;
+      const opener = trigger || document.activeElement;
       el.showModal();
       return () => {
         if (el.open) el.close();
-        if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+        const target = opener?.isConnected ? opener : returnFocusRef?.current;
+        target?.focus({ preventScroll: true });
       };
     }, []);
     return (
@@ -639,6 +640,10 @@
             )}
             {tab === "debts" && (
               <>
+                <HomeLoans
+                  data={data} token={token} selected={selected} period={period}
+                  name={name} onState={setData}
+                />
                 <div className="home-section-head">
                   <div>
                     <h2>Cuentas entre integrantes y aportes</h2>
@@ -648,27 +653,14 @@
                     </p>
                   </div>
                   {data.admin && (
-                    <button className="home-btn" onClick={() => open("DEBT")}>
-                      + Registrar deuda
-                    </button>
+                    <div>
+                      <button className="home-btn home-btn-light" onClick={() => open("DEBT")}>
+                        + Registrar deuda
+                      </button>
+                      <small className="home-debt-help">Registro directo sin solicitud de préstamo.</small>
+                    </div>
                   )}
                 </div>
-                {!!data.loans?.length && (
-                  <section className="home-panel">
-                    <h2>Solicitudes de préstamo</h2>
-                    {data.loans
-                      .filter((loan) => (!personId || loan.debtorId === personId || loan.creditorId === personId) &&
-                        (!period || loan.date.slice(0, 7) === period))
-                      .slice().reverse().map((loan) => (
-                        <HomeMovement key={loan.id} title={loan.name} cents={loan.cents}
-                          detail={name(loan.creditorId) + " → " + name(loan.debtorId) + " · " + (loan.due ? "Vence " + loan.due : "Sin vencimiento")}>
-                          <HomeBadge tone={{ accepted: "success", pending: "warning", rejected: "danger" }[loan.status]}>
-                            {{ accepted: "Aceptado", pending: "Esperando aceptación", rejected: "Rechazado", cancelled: "Cancelado" }[loan.status]}
-                          </HomeBadge>
-                        </HomeMovement>
-                      ))}
-                  </section>
-                )}
                 {pendingPayments.filter(
                   (p) =>
                     !personId ||
