@@ -12,6 +12,8 @@ function homeIsAgreementType_(type) {
 
 function homeEventSupported_(type, data) {
   if (!data || typeof data !== "object") return false;
+  if (homeIsCorrectionType_(type) || homeIsCreditType_(type))
+    return data.schema === HOME_ADJUSTMENT_SCHEMA_ && data.eventVersion === 1;
   if (homeIsLoanType_(type))
     return data.schema === HOME_LOAN_SCHEMA_ && data.eventVersion === 1;
   if (homeIsReimbursementType_(type))

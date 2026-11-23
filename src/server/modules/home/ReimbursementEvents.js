@@ -26,6 +26,7 @@ function homeReimbursementCommand_(request, state, session) {
         item.creditorId,
     );
     homeReimbursementAccess_(state, session, ob && ob.debtorId);
+    if (ob.pendingCorrectionId) throw new Error("La obligación tiene una corrección pendiente.");
     const cents = homeCents_(p.amount);
     if (cents > ob.available)
       throw new Error("El abono supera el saldo disponible.");
@@ -90,7 +91,8 @@ function homeReimbursementReplay_(obligations, payments, event, data) {
       payments[event.id] ||
       !Number.isSafeInteger(data.cents) ||
       data.cents <= 0 ||
-      data.cents > ob.cents - ob.paid - ob.reserved
+      ob.pendingCorrectionId ||
+      data.cents > homeObligationAvailable_(ob)
     )
       throw new Error("Historial de abonos inválido.");
     ob.reserved += data.cents;
