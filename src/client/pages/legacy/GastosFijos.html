@@ -88,81 +88,153 @@
     return <span className={`badge rounded-pill ${cls}`}>{s}</span>;
   }
 
-  function bsModalShow(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
+  function useGastosFijosDialogs(formRef, detailRef) {
+    const controls = React.useRef(null);
 
-    // Preferimos Bootstrap JS si está disponible
-    if (window.bootstrap?.Modal) {
-      window.bootstrap.Modal.getOrCreateInstance(el).show();
-      return;
-    }
+    React.useLayoutEffect(() => {
+      const dialogs = [formRef.current, detailRef.current];
+      const Modal = window.bootstrap?.Modal;
+      const events = new AbortController();
+      const options = { signal: events.signal };
+      let active = null;
+      let next = null;
+      let phase = "closed";
+      let unmounted = false;
+      let backdrop = null;
 
-    // Fallback (sin bootstrap.js): mostrar modal manualmente
-    try {
-      // Bind de botones con data-bs-dismiss="modal"
-      if (!el.dataset.wbsBindDismiss) {
-        el.dataset.wbsBindDismiss = '1';
-        el.addEventListener('click', (ev) => {
-          const btn = ev.target.closest('[data-bs-dismiss="modal"]');
-          if (btn) {
-            ev.preventDefault();
-            bsModalHide(id);
-          }
-        });
+      function focus(target) {
+        if (target?.isConnected) target.focus({ preventScroll: true });
       }
 
-      el.style.display = 'block';
-      el.classList.add('show');
-      el.removeAttribute('aria-hidden');
-      el.setAttribute('aria-modal', 'true');
-      document.body.classList.add('modal-open');
+      function shown(dialog) {
+        phase = "shown";
+        if (unmounted) {
+          close(dialog);
+          return;
+        }
+        focus(active.initialFocus || dialog.querySelector("[data-gf-initial-focus]"));
+      }
 
-      // Backdrop
-      const bd = document.createElement('div');
-      bd.className = 'modal-backdrop fade show';
-      bd.dataset.modalFor = id;
-      document.body.appendChild(bd);
+      function beforeHide(dialog) {
+        phase = "hiding";
+        if (dialog.contains(document.activeElement)) document.activeElement.blur();
+        dialog.inert = true;
+      }
 
-      // Tap en backdrop cierra
-      bd.addEventListener('click', () => bsModalHide(id));
+      function hidden(dialog) {
+        const closed = active;
+        active = null;
+        phase = "closed";
 
-      // Enfocar primer input para facilitar en móvil
-      setTimeout(() => {
-        const focusable = el.querySelector('input, select, textarea, button');
-        if (focusable && focusable.focus) focusable.focus();
-      }, 50);
-    } catch (e) {
-      // no-op
-    }
-  }
+        if (unmounted) {
+          // Bootstrap puede insertar el diálogo en body si terminó de abrir tras desmontar.
+          if (dialog.parentNode === document.body) dialog.remove();
+          dispose();
+          return;
+        }
 
-  function bsModalHide(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
+        if (next) {
+          const entry = next;
+          next = null;
+          show(entry);
+        } else if (closed.parent) {
+          show({ ...closed.parent, initialFocus: closed.trigger });
+        } else {
+          focus(closed.trigger);
+        }
+      }
 
-    if (window.bootstrap?.Modal) {
-      const inst = window.bootstrap.Modal.getInstance(el) || window.bootstrap.Modal.getOrCreateInstance(el);
-      inst.hide();
-      return;
-    }
+      function show(entry) {
+        const { dialog, trigger } = entry;
+        active = entry;
+        phase = "showing";
+        dialog.inert = false;
+        if (Modal) {
+          Modal.getOrCreateInstance(dialog).show(trigger);
+          return;
+        }
+        dialog.style.display = "block";
+        dialog.classList.add("show");
+        dialog.removeAttribute("aria-hidden");
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-modal", "true");
+        document.body.classList.add("modal-open");
+        backdrop = document.createElement("div");
+        backdrop.className = "modal-backdrop show";
+        backdrop.onclick = () => close(dialog);
+        document.body.append(backdrop);
+        shown(dialog);
+      }
 
-    try {
-      el.classList.remove('show');
-      el.style.display = 'none';
-      el.setAttribute('aria-hidden', 'true');
-      el.removeAttribute('aria-modal');
+      function close(dialog) {
+        if (active?.dialog !== dialog || phase !== "shown") return;
+        if (Modal) {
+          Modal.getInstance(dialog).hide();
+          return;
+        }
+        beforeHide(dialog);
+        dialog.classList.remove("show");
+        dialog.style.display = "none";
+        dialog.setAttribute("aria-hidden", "true");
+        dialog.removeAttribute("aria-modal");
+        dialog.removeAttribute("role");
+        backdrop.remove();
+        backdrop = null;
+        if (!document.querySelector(".modal.show")) document.body.classList.remove("modal-open");
+        hidden(dialog);
+      }
 
-      document.querySelectorAll('.modal-backdrop').forEach(bd => {
-        if (bd?.dataset?.modalFor === id) bd.remove();
-      });
+      function open(dialog, trigger) {
+        if (!active) {
+          show({ dialog, trigger });
+        } else if (phase === "shown" && active.dialog !== dialog) {
+          next = { dialog, trigger, parent: active };
+          close(active.dialog);
+        }
+      }
 
-      // Quitar modal-open solo si no quedan modales abiertos
-      const anyOpen = document.querySelector('.modal.show');
-      if (!anyOpen) document.body.classList.remove('modal-open');
-    } catch (e) {
-      // no-op
-    }
+      function dispose() {
+        events.abort();
+        for (const dialog of dialogs) Modal?.getInstance(dialog)?.dispose();
+      }
+
+      for (const dialog of dialogs) {
+        if (Modal) {
+          dialog.addEventListener("shown.bs.modal", () => shown(dialog), options);
+          dialog.addEventListener("hide.bs.modal", () => beforeHide(dialog), options);
+          dialog.addEventListener("hidden.bs.modal", () => hidden(dialog), options);
+        } else {
+          dialog.addEventListener("click", (event) => {
+            if (event.target === dialog || event.target.closest('[data-bs-dismiss="modal"]')) close(dialog);
+          }, options);
+          dialog.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              close(dialog);
+            }
+            if (event.key !== "Tab") return;
+            const targets = [...dialog.querySelectorAll("button, input, select, textarea, a[href]")]
+              .filter((element) => element.getClientRects().length && !element.matches(":disabled") && element.tabIndex >= 0);
+            const first = targets[0];
+            const last = targets.at(-1);
+            if (event.shiftKey ? document.activeElement === first : document.activeElement === last) {
+              event.preventDefault();
+              focus(event.shiftKey ? last : first);
+            }
+          }, options);
+        }
+      }
+
+      controls.current = { open, close };
+      return () => {
+        unmounted = true;
+        controls.current = null;
+        if (active) close(active.dialog);
+        else dispose();
+      };
+    }, [formRef, detailRef]);
+
+    return controls;
   }
 
   function buildPeriodList() {
@@ -219,6 +291,9 @@
     const [formMode, setFormMode] = React.useState("create"); // create | edit
     const [form, setForm] = React.useState(emptyForm);
     const [saving, setSaving] = React.useState(false);
+    const formDialog = React.useRef(null);
+    const detailDialog = React.useRef(null);
+    const dialogs = useGastosFijosDialogs(formDialog, detailDialog);
 
     const servicios = [
       "Energía",
@@ -316,13 +391,13 @@
       return { items, totalMes, aportadoMes, pendienteMes, proximos };
     }, [gastos]);
 
-    function openCreate() {
+    function openCreate(event) {
       setFormMode("create");
       setForm({ ...emptyForm, periodo: filters.periodo || defaultPeriodo });
-      bsModalShow("gfModalForm");
+      dialogs.current.open(formDialog.current, event.currentTarget);
     }
 
-    function openEdit(g) {
+    function openEdit(g, trigger) {
       setFormMode("edit");
       const copy = {
         id: g.id,
@@ -342,12 +417,12 @@
         })) : []
       };
       setForm(copy);
-      bsModalShow("gfModalForm");
+      dialogs.current.open(formDialog.current, trigger);
     }
 
-    function openDetail(g) {
+    function openDetail(g, trigger) {
       setActiveGasto({ ...g, ...gfEstadoDerivado(g) });
-      bsModalShow("gfModalDetail");
+      dialogs.current.open(detailDialog.current, trigger);
     }
 
     function addAporteRow() {
@@ -434,7 +509,7 @@
         const res = await gasCall("guardarGastoFijo", payload);
         if (!res || !res.ok) throw new Error(res?.message || "No se pudo guardar.");
 
-        bsModalHide("gfModalForm");
+        dialogs.current?.close(formDialog.current);
         // Recargar lista con filtros actuales
         await applyFilters();
       } catch (e) {
@@ -703,7 +778,7 @@
                   computed.items.map(g => (
                     <tr key={g.id}>
                       <td>
-                        <button className="btn btn-sm btn-outline-dark" onClick={() => openDetail(g)}>
+                        <button className="btn btn-sm btn-outline-dark" onClick={(event) => openDetail(g, event.currentTarget)}>
                           Ver detalle
                         </button>
                       </td>
@@ -720,7 +795,7 @@
                       <td><EstadoBadge estado={g.estado} /></td>
                       <td className="text-end">
                         <div className="btn-group btn-group-sm" role="group">
-                          <button className="btn btn-outline-secondary" onClick={() => openEdit(g)} title="Editar">
+                          <button className="btn btn-outline-secondary" onClick={(event) => openEdit(g, event.currentTarget)} title="Editar">
                             <i className="bi bi-pencil"></i>
                           </button>
                           <button className="btn btn-outline-secondary" onClick={() => deleteGasto(g.id)} title="Eliminar">
@@ -777,10 +852,10 @@
                   </div>
 
                   <div className="d-flex gap-2 mt-3">
-                    <button className="btn btn-outline-dark btn-sm flex-fill" onClick={() => openDetail(g)}>
+                    <button className="btn btn-outline-dark btn-sm flex-fill" onClick={(event) => openDetail(g, event.currentTarget)}>
                       Ver detalle
                     </button>
-                    <button className="btn btn-outline-secondary btn-sm" onClick={() => openEdit(g)} title="Editar">
+                    <button className="btn btn-outline-secondary btn-sm" onClick={(event) => openEdit(g, event.currentTarget)} title="Editar">
                       <i className="bi bi-pencil"></i>
                     </button>
                     <button className="btn btn-outline-secondary btn-sm" onClick={() => deleteGasto(g.id)} title="Eliminar">
@@ -797,21 +872,23 @@
         </div>
 
         {/* Modal: Nuevo/Editar */}
-        <div className="modal fade" id="gfModalForm" tabIndex="-1" aria-hidden="true">
+        <div className="modal fade" id="gfModalForm" ref={formDialog} tabIndex="-1" aria-hidden="true" aria-labelledby="gfModalFormTitle">
           <div className="modal-dialog modal-lg modal-dialog-scrollable">
             <div className="modal-content">
               <div className="modal-header">
-                <h5 className="modal-title">{formMode === "edit" ? "Editar gasto fijo" : "Nuevo gasto fijo"}</h5>
-                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <h5 className="modal-title" id="gfModalFormTitle">{formMode === "edit" ? "Editar gasto fijo" : "Nuevo gasto fijo"}</h5>
+                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Cerrar diálogo"></button>
               </div>
 
               <form onSubmit={saveForm}>
                 <div className="modal-body">
                   <div className="row g-2">
                     <div className="col-12 col-md-4">
-                      <label className="form-label">Servicio <span className="text-danger">*</span></label>
+                      <label className="form-label" htmlFor="gfServicio">Servicio <span className="text-danger">*</span></label>
                       <select
                         className="form-select"
+                        id="gfServicio"
+                        data-gf-initial-focus
                         value={form.servicio}
                         onChange={(e) => setForm(f => ({ ...f, servicio: e.target.value }))}
                       >
@@ -988,12 +1065,12 @@
         </div>
 
         {/* Modal: Detalle */}
-        <div className="modal fade" id="gfModalDetail" tabIndex="-1" aria-hidden="true">
+        <div className="modal fade" id="gfModalDetail" ref={detailDialog} tabIndex="-1" aria-hidden="true" aria-labelledby="gfModalDetailTitle">
           <div className="modal-dialog modal-lg modal-dialog-scrollable">
             <div className="modal-content">
               <div className="modal-header">
-                <h5 className="modal-title">Detalle del gasto</h5>
-                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <h5 className="modal-title" id="gfModalDetailTitle">Detalle del gasto</h5>
+                <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Cerrar diálogo"></button>
               </div>
               <div className="modal-body">
                 {!activeGasto ? (
@@ -1028,7 +1105,7 @@
                         <div className="text-muted small">Marca como pagado cada aporte cuando se reciba.</div>
                       </div>
                       <div className="d-flex gap-2">
-                        <button className="btn btn-outline-secondary btn-sm" onClick={() => openEdit(activeGasto)}>
+                        <button className="btn btn-outline-secondary btn-sm" onClick={(event) => openEdit(activeGasto, event.currentTarget)}>
                           <i className="bi bi-pencil me-2"></i>Editar
                         </button>
                         <button className="btn btn-outline-success btn-sm" onClick={() => markAllPaid(activeGasto.id)}>
@@ -1074,7 +1151,7 @@
                 )}
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
+                <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal" data-gf-initial-focus>Cerrar</button>
               </div>
             </div>
           </div>
